@@ -66,14 +66,14 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 			peerID = logging.GetPeerID()
 		}
 	}
-	
+
 	// Determine the identifier to use for serviceKey: prefer peerID over IP
 	// This ensures services are identified by peer_id (e.g., ops-proxy-xxx) rather than IP (e.g., 120.92.88.191)
 	serviceIdentifier := peerID
 	if serviceIdentifier == "" {
 		serviceIdentifier = ip
 	}
-	
+
 	// Remove all existing services with the same name to ensure name uniqueness
 	// This ensures that if multiple peers register the same service name, only the latest one is kept
 	// IMPORTANT: Only remove if the connection is the same or if it's a different peer
@@ -84,9 +84,29 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		// Check if this is the same connection being reused
 		// If so, we should update in place rather than remove
 		if existingClient.Conn == conn && conn != nil {
-			// Same connection, just update the info - don't remove from services map
+			// Same connection, check if peer_id and other key info are the same
+			// If peer_id is the same and other info hasn't changed, skip update
+			existingPeerID := existingClient.PeerID
+			if existingPeerID == "" {
+				existingPeerID = existingClient.IP
+			}
+			newPeerID := peerID
+			if newPeerID == "" {
+				newPeerID = ip
+			}
+
+			// If peer_id is the same and backend/peerAddr haven't changed, skip update
+			if existingPeerID == newPeerID &&
+				existingClient.BackendAddr == backendAddr &&
+				existingClient.PeerAddr == peerAddr {
+				logging.Logf("[registry] skipping update - service unchanged name=%q peer_id=%q backend=%q",
+					name, existingPeerID, backendAddr)
+				return // Skip update if nothing changed
+			}
+
+			// Same connection but info changed, update in place
 			// This preserves the connection for findPeerAddrByConn
-			logging.Logf("[registry] updating existing service with same name and connection name=%q old_ip=%s old_peer_id=%q new_peer_id=%q", 
+			logging.Logf("[registry] updating existing service with same name and connection name=%q old_ip=%s old_peer_id=%q new_peer_id=%q",
 				name, existingClient.IP, existingClient.PeerID, peerID)
 		} else {
 			// Different connection or conn is nil, safe to remove old entry
@@ -96,7 +116,7 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 			}
 			oldKey := serviceKey(name, oldIdentifier)
 			keysToDelete = append(keysToDelete, oldKey)
-			logging.Logf("[registry] removing old service with same name name=%q old_ip=%s old_peer_id=%q (different connection)", 
+			logging.Logf("[registry] removing old service with same name name=%q old_ip=%s old_peer_id=%q (different connection)",
 				name, existingClient.IP, existingClient.PeerID)
 		}
 	}
@@ -118,7 +138,7 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 			}
 			if !found {
 				keysToDelete = append(keysToDelete, key)
-				logging.Logf("[registry] removing duplicate service name=%q old_key=%s old_ip=%s old_peer_id=%q", 
+				logging.Logf("[registry] removing duplicate service name=%q old_key=%s old_ip=%s old_peer_id=%q",
 					name, key, svc.IP, svc.PeerID)
 			}
 		}
@@ -136,10 +156,10 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		LastSeen:    time.Now(),
 		// Local services are always "connected" (no connection needed, direct access)
 		// Remote services need active connection
-		Connected:   connected,
-		ConnMu:      connMu,
-		PeerID:      peerID,
-		PeerAddr:    peerAddr,
+		Connected: connected,
+		ConnMu:    connMu,
+		PeerID:    peerID,
+		PeerAddr:  peerAddr,
 	}
 	// Use name as key so we can route to the corresponding backend by name
 	// This ensures name uniqueness: if multiple peers register the same name, only the latest one is kept
@@ -157,12 +177,12 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		}
 	}
 	logging.Logf("[registry] registered name=%q ip=%s backend=%q peer_id=%q peer_addr=%q connected=%t conn=%v conn_info=%s", name, ip, backendAddr, peerID, peerAddr, connected, conn != nil, connInfo)
-	
+
 	// Update metrics
 	if s.collector != nil {
 		s.collector.RecordClientRegistration(name)
 	}
-	
+
 	// Note: logServicesTable() is now only called in debug mode
 	// If you need to print services table, use LogServicesTable() instead
 }
@@ -360,16 +380,16 @@ func (s *ProxyServer) LogServicesTable() {
 
 // logPeerServicesMap prints the full peerServices map structure
 func (s *ProxyServer) logPeerServicesMap() {
-	
+
 	peerID := logging.GetPeerID()
-	
+
 	if len(s.peerServices) == 0 {
 		logging.Logf("[registry] peer_services_map peer_id=%s {}", peerID)
 		return
 	}
-	
+
 	logging.Logf("[registry] peer_services_map peer_id=%s {total_peers=%d}", peerID, len(s.peerServices))
-	
+
 	for peerIP, peerSvc := range s.peerServices {
 		if peerSvc == nil {
 			continue
@@ -389,15 +409,15 @@ func (s *ProxyServer) logPeerServicesMap() {
 		if remotePeerID == "" {
 			remotePeerID = peerIP
 		}
-		logging.Logf("[registry] peer_services_map peer_id=%s   remote_peer_id=%s remote_peer_addr=%s {services=%d last_sync=%d}", 
+		logging.Logf("[registry] peer_services_map peer_id=%s   remote_peer_id=%s remote_peer_addr=%s {services=%d last_sync=%d}",
 			peerID, remotePeerID, peerIP, len(peerSvc.Services), peerSvc.LastSync)
-		
+
 		if len(peerSvc.Services) > 0 {
 			logging.Logf("[registry] peer_services_map peer_id=%s     | name | backend |", peerID)
 			logging.Logf("[registry] peer_services_map peer_id=%s     | ---- | ------- |", peerID)
 			for name, svc := range peerSvc.Services {
 				if svc != nil {
-					logging.Logf("[registry] peer_services_map peer_id=%s     | %s | %s |", 
+					logging.Logf("[registry] peer_services_map peer_id=%s     | %s | %s |",
 						peerID, name, svc.BackendAddr)
 				}
 			}
@@ -455,7 +475,7 @@ func (s *ProxyServer) servicesByNameSnapshot(name string) string {
 		if c.Name != name {
 			continue
 		}
-		logging.Logf("[servicesByNameSnapshot] found match key=%q name=%q peer_id=%q remote_peer_addr=%q backend=%q", 
+		logging.Logf("[servicesByNameSnapshot] found match key=%q name=%q peer_id=%q remote_peer_addr=%q backend=%q",
 			key, c.Name, c.PeerID, c.IP, c.BackendAddr)
 		// Use PeerID for display (not IP which might be proxy address)
 		peerIdentifier := c.PeerID
@@ -487,19 +507,19 @@ func (s *ProxyServer) RegisterLocalServices(serviceAddr string, defaultName stri
 	registered := 0
 	for i, b := range parsed {
 		logging.Logf("[registry] processing service %d/%d: name=%q address=%q", i+1, len(parsed), b.Name, b.Address)
-		
+
 		// Validate service name and address
 		if strings.TrimSpace(b.Name) == "" || strings.TrimSpace(b.Address) == "" {
 			logging.Logf("[registry] skipping invalid service: name=%q address=%q", b.Name, b.Address)
 			continue
 		}
-		
+
 		// Check if name looks like a port number (invalid service name)
 		if _, err := strconv.Atoi(b.Name); err == nil {
 			logging.Logf("[registry] skipping service with numeric name (likely misconfigured): name=%q address=%q", b.Name, b.Address)
 			continue
 		}
-		
+
 		logging.Logf("[registry] registering local service: name=%q backend=%q", b.Name, b.Address)
 		s.RegisterClientByName(b.Name, "local", b.Address, nil)
 		registered++

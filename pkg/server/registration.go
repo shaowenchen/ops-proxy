@@ -143,6 +143,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			peerID = regs[0].PeerID
 			peerAddr = regs[0].PeerAddr
 		}
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[request][debug] extracted from REGISTER: peer_id=%q peer_addr=%q", peerID, peerAddr)
+		}
 		for _, reg := range regs {
 			clientName := strings.TrimSpace(reg.Name)
 			backendAddr := strings.TrimSpace(reg.Backend)
@@ -213,13 +216,15 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 	// Process first line (must be REGISTER)
 	processRegister(firstLine)
 
-	// Get registration read timeout from config, default 180s
-	readTimeout := 180 * time.Second
+	// Get registration read timeout from config
+	// Design doc: 30s timeout to detect peer offline
+	readTimeout := 30 * time.Second
 	if cfg != nil {
 		readTimeout = cfg.GetRegistrationReadTimeout()
 	}
 
-	// Keep reading subsequent REGISTER, SYNC, or FORWARD lines. Client sends periodic heartbeat (default 30s); no separate heartbeat protocol needed.
+	// Keep reading subsequent REGISTER, SYNC, or FORWARD lines. 
+	// Client sends periodic heartbeat (default 3s); no separate heartbeat protocol needed.
 	for {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		line, err := reader.ReadString('\n')

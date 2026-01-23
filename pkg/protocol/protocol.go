@@ -122,9 +122,12 @@ func ParseRegisterLine(line string) (regs []Registration, ok bool) {
 		// Medium format: REGISTER:peer_id:name:backend,...
 		parts := strings.SplitN(rest, ":", 2)
 		peerID = strings.TrimSpace(parts[0])
+		peerAddr = ""  // No peer_addr in this format
 		servicesPart = parts[1]
 	} else {
 		// Old format: REGISTER:name:backend,...
+		peerID = ""
+		peerAddr = ""
 		servicesPart = rest
 	}
 

@@ -393,7 +393,7 @@ func (s *ProxyServer) servicesDebugSnapshot() string {
 }
 
 // servicesByNameSnapshot returns service entries for a given name.
-// Format: peer=... backend=...
+// Format: peer_id=... backend=...
 func (s *ProxyServer) servicesByNameSnapshot(name string) string {
 	logging.Logf("[servicesByNameSnapshot] START name=%q", name)
 	logging.Logf("[servicesByNameSnapshot] about to acquire RLock name=%q", name)
@@ -421,8 +421,14 @@ func (s *ProxyServer) servicesByNameSnapshot(name string) string {
 		if c.Name != name {
 			continue
 		}
-		logging.Logf("[servicesByNameSnapshot] found match key=%q name=%q ip=%q backend=%q", key, c.Name, c.IP, c.BackendAddr)
-		items = append(items, "peer="+c.IP+" backend="+c.BackendAddr)
+		logging.Logf("[servicesByNameSnapshot] found match key=%q name=%q peer_id=%q remote_peer_addr=%q backend=%q", 
+			key, c.Name, c.PeerID, c.IP, c.BackendAddr)
+		// Use PeerID for display (not IP which might be proxy address)
+		peerIdentifier := c.PeerID
+		if peerIdentifier == "" {
+			peerIdentifier = c.IP
+		}
+		items = append(items, "peer_id="+peerIdentifier+" backend="+c.BackendAddr)
 	}
 	if len(items) == 0 {
 		logging.Logf("[servicesByNameSnapshot] no matches found, returning <empty>")

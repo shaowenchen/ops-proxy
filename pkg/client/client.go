@@ -248,12 +248,15 @@ func connectToPeer(peerAddr string, registrations []struct {
 		}
 		registration := protocol.FormatRegisterWithPeerID(peerID, peerAddr, regs)
 		
+		// Always log registration message to verify format
+		logging.Logf("[client] registration message: %q", strings.TrimSpace(registration))
+		
 		if cfg != nil && cfg.Log.Level == "debug" {
 			items := make([]string, 0, len(regs))
 			for _, r := range regs {
 				items = append(items, fmt.Sprintf("%s->%s", r.Name, r.Backend))
 			}
-			logging.Logf("[request][debug] sending registration (peer=%s peer_id=%s peer_addr=%s count=%d items=%s msg=%q)", link.Addr, peerID, peerAddr, len(regs), strings.Join(items, ","), strings.TrimSpace(registration))
+			logging.Logf("[request][debug] sending registration (peer=%s peer_id=%s peer_addr=%s count=%d items=%s)", link.Addr, peerID, peerAddr, len(regs), strings.Join(items, ","))
 		}
 
 		_, err := conn.Write([]byte(registration))
@@ -331,7 +334,8 @@ func connectToPeer(peerAddr string, registrations []struct {
 		}
 
 		// Get heartbeat interval
-		heartbeatInterval := 30 * time.Second
+		// Design doc: send heartbeat every 3 seconds
+		heartbeatInterval := 3 * time.Second
 		if cfg != nil {
 			heartbeatInterval = cfg.GetHeartbeatInterval()
 		}
@@ -346,7 +350,7 @@ func connectToPeer(peerAddr string, registrations []struct {
 				case <-ticker.C:
 					_, _ = conn.Write([]byte(registration))
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[request][debug] re-registration sent (peer=%s count=%d)", link.Addr, len(regs))
+						logging.Logf("[request][debug] heartbeat sent (peer=%s interval=%s)", link.Addr, heartbeatInterval)
 					}
 				case <-stopReg:
 					return
@@ -383,9 +387,10 @@ func handleConnectionWithReader(conn net.Conn, reader *bufio.Reader, serverAddre
 	RegisterClientByName(name, ip, backendAddr string, conn net.Conn)
 	LogServicesTable()
 }) error {
-	// Read timeout for control connection. Client will re-register every 30s,
+	// Read timeout for control connection. Client will re-register every 3s (heartbeat),
+	// Design doc: 30s timeout for detecting peer offline
 	// so the server should be sending either OK/ERROR responses or FORWARD commands.
-	readTimeout := 60 * time.Second
+	readTimeout := 30 * time.Second
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))

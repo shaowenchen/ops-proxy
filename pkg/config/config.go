@@ -103,14 +103,14 @@ func (c *Config) SetDefaults() {
 		c.Peer.ConnectionTimeout = 5
 	}
 	if c.Peer.RegistrationReadTimeout == 0 {
-		c.Peer.RegistrationReadTimeout = 180
+		c.Peer.RegistrationReadTimeout = 30  // Design doc: 30s timeout to detect peer offline
 	}
 
 	if c.Peer.ReconnectInterval == 0 {
 		c.Peer.ReconnectInterval = 5
 	}
 	if c.Peer.HeartbeatInterval == 0 {
-		c.Peer.HeartbeatInterval = 30
+		c.Peer.HeartbeatInterval = 3  // Design doc: send heartbeat every 3 seconds
 	}
 
 	if c.Log.Level == "" {

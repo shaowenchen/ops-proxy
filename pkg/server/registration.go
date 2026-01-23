@@ -264,6 +264,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		// Check if it's a DATA line (data stream on control connection)
 		// This happens when peer sends data after FORWARD command on the same control connection
 		if proxyID, ok := protocol.ParseDataLine(line); ok {
+			logging.Logf("[server] RECEIVED DATA line on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
 			if cfg != nil && cfg.Log.Level == "debug" {
 				logging.Logf("[request][debug] DATA line on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
 			}
@@ -274,7 +275,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				delete(s.pendingData, proxyID)
 			}
 			s.pendingLock.Unlock()
-			
+
 			if ch != nil {
 				// Peer-to-peer data transmission: reuse control connection (long connection)
 				// Extract any buffered data from bufio.Reader before switching to stream mode
@@ -325,11 +326,13 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		// When Peer B sends FORWARD to Peer A, Peer A receives it here on the control connection
 		// Peer A should then connect to local backend and establish DATA connection back to Peer B
 		if strings.HasPrefix(line, protocol.CmdForward+":") {
+			logging.Logf("[server] RECEIVED FORWARD command (remote=%s line=%q)", clientIP, strings.TrimSpace(line))
 			if cfg != nil && cfg.Log.Level == "debug" {
 				logging.Logf("[request][debug] received FORWARD command (remote=%s line=%q)", clientIP, strings.TrimSpace(line))
 			}
 			proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line)
 			if ok {
+				logging.Logf("[server] FORWARD command parsed (remote=%s proxy_id=%s name=%s backend=%s)", clientIP, proxyID, name, backendAddr)
 				if cfg != nil && cfg.Log.Level == "debug" {
 					logging.Logf("[request][debug] FORWARD command parsed (remote=%s proxy_id=%s name=%s backend=%s)", clientIP, proxyID, name, backendAddr)
 				}
@@ -694,13 +697,19 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		}
 		return
 	}
-	
+
 	// Send DATA header to identify this data stream on the control connection
 	dataHeader := protocol.FormatData(proxyID)
+	controlConnRemote := ""
+	if controlConn != nil && controlConn.RemoteAddr() != nil {
+		controlConnRemote = controlConn.RemoteAddr().String()
+	}
+	logging.Logf("[server] SENDING DATA header on control connection (proxy_id=%s name=%s header=%q control_remote=%s)",
+		proxyID, name, strings.TrimSpace(dataHeader), controlConnRemote)
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[request][debug] sending DATA header on control connection (proxy_id=%s name=%s header=%q)", proxyID, name, strings.TrimSpace(dataHeader))
 	}
-	
+
 	// Send DATA header on control connection to mark the start of data transmission
 	if _, err := controlConn.Write([]byte(dataHeader)); err != nil {
 		logging.Logf("[server] DATA header send failed on control connection proxy_id=%s err=%v", proxyID, err)
@@ -717,7 +726,7 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		logging.Logf("[request][debug] DATA header sent (proxy_id=%s name=%s)", proxyID, name)
 		logging.Logf("[request][debug] using control connection for data transmission (proxy_id=%s name=%s)", proxyID, name)
 	}
-	
+
 	// Use control connection as data connection
 	dataConn := controlConn
 

@@ -265,8 +265,22 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		if strings.HasPrefix(line, protocol.CmdForward+":") {
 			proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line)
 			if ok {
-				// Find the peer that sent this FORWARD command using the connection
-				// We need the peer's real bind address (not the central gateway address)
+				// Check if this service is a local service first
+				// If it's local, we should forward directly to the backend
+				// and establish DATA connection back to the requesting peer
+				serviceClient := s.clients[name] // Check clients map first (name is the key there)
+				if serviceClient == nil {
+					// Try to find by name in services map (might be registered with peer_id)
+					for key, client := range s.services {
+						if client != nil && strings.HasPrefix(key, name+"@") {
+							serviceClient = client
+							break
+						}
+					}
+				}
+				
+				// If service is local, we still need to find the peer that sent FORWARD
+				// to establish DATA connection back
 				sourcePeerAddr := s.findPeerAddrByConn(conn)
 				if sourcePeerAddr == "" {
 					// Fallback to connection's remote address (might be gateway)
@@ -279,9 +293,17 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				} else {
 					logging.Logf("[server] found peer_addr=%s from registered services", sourcePeerAddr)
 				}
-				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_addr=%s", proxyID, name, backendAddr, sourcePeerAddr)
+				
+				// Log whether service is local or remote
+				serviceType := "remote"
+				if serviceClient != nil && serviceClient.IP == "local" {
+					serviceType = "local"
+					logging.Logf("[server] FORWARD for local service name=%s backend=%s - will forward directly to backend", name, backendAddr)
+				}
+				
+				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_addr=%s service_type=%s", proxyID, name, backendAddr, sourcePeerAddr, serviceType)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] FORWARD command received (from_addr=%s proxy_id=%s name=%s backend=%s)", sourcePeerAddr, proxyID, name, backendAddr)
+					logging.Logf("[request][debug] FORWARD command received (from_addr=%s proxy_id=%s name=%s backend=%s service_type=%s)", sourcePeerAddr, proxyID, name, backendAddr, serviceType)
 				}
 				// Handle FORWARD request: connect to backend and establish DATA connection
 				// Run in goroutine to avoid blocking the control connection
@@ -709,6 +731,13 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 		// Check if this is the same connection
 		if client.Conn == conn {
 			logging.Logf("[server] findPeerAddrByConn: FOUND MATCH key=%s peer_id=%s peer_addr=%s ip=%s", key, client.PeerID, client.PeerAddr, client.IP)
+			// If this is a local service, it means the connection is from a local client, not a peer
+			// This shouldn't happen for FORWARD commands, but if it does, we should handle it
+			if client.IP == "local" {
+				logging.Logf("[server] findPeerAddrByConn: WARNING - matched local service, this connection is not from a peer. This should not happen for FORWARD commands.")
+				// Return empty to indicate we couldn't find the peer address
+				return ""
+			}
 			if client.PeerAddr != "" {
 				logging.Logf("[server] found peer_addr=%s (peer_id=%s) for conn=%v", client.PeerAddr, client.PeerID, connRemote)
 				return client.PeerAddr

@@ -608,6 +608,23 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 	
 	logging.Logf("[server] findPeerAddrByConn: searching for conn=%v, total_services=%d", connRemote, len(s.services))
 	
+	// Debug: print all services to see what's registered
+	for key, client := range s.services {
+		if client == nil {
+			continue
+		}
+		connMatch := "no"
+		if client.Conn == conn {
+			connMatch = "YES"
+		}
+		connInfo := "nil"
+		if client.Conn != nil && client.Conn.RemoteAddr() != nil {
+			connInfo = client.Conn.RemoteAddr().String()
+		}
+		logging.Logf("[server] findPeerAddrByConn: service key=%s peer_id=%s peer_addr=%s ip=%s conn=%s match=%s", 
+			key, client.PeerID, client.PeerAddr, client.IP, connInfo, connMatch)
+	}
+	
 	// Find any service registered with this connection
 	for key, client := range s.services {
 		if client == nil {
@@ -616,16 +633,16 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 		
 		// Check if this is the same connection
 		if client.Conn == conn {
-			logging.Logf("[server] findPeerAddrByConn: found match key=%s peer_id=%s peer_addr=%s ip=%s", key, client.PeerID, client.PeerAddr, client.IP)
+			logging.Logf("[server] findPeerAddrByConn: FOUND MATCH key=%s peer_id=%s peer_addr=%s ip=%s", key, client.PeerID, client.PeerAddr, client.IP)
 			if client.PeerAddr != "" {
 				logging.Logf("[server] found peer_addr=%s (peer_id=%s) for conn=%v", client.PeerAddr, client.PeerID, connRemote)
 				return client.PeerAddr
 			} else {
-				logging.Logf("[server] peer_addr is empty for key=%s (peer_id=%s), checking other services with same conn", key, client.PeerID)
+				logging.Logf("[server] WARNING: peer_addr is EMPTY for key=%s (peer_id=%s), this will cause DATA connection to fail", key, client.PeerID)
 			}
 		}
 	}
 	
-	logging.Logf("[server] peer_addr not found for conn=%v, will use RemoteAddr as fallback", connRemote)
+	logging.Logf("[server] ERROR: peer_addr not found for conn=%v, will use RemoteAddr as fallback (this will likely fail)", connRemote)
 	return ""
 }

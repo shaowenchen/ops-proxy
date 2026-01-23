@@ -65,6 +65,8 @@ Peer 只进行两种转发:
 
 ### 3.2 转发示例
 
+在转发过程中，连接是持续保持的
+
 - Peer A 收到 test-cluster-a.example.com:80 的请求
 
 ```

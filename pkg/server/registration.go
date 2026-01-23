@@ -487,16 +487,26 @@ func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr 
 	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s", proxyID, backendAddr, backendConn.LocalAddr())
 
 	// Step 2: Connect back to requesting peer for DATA channel
-	logging.Logf("[server] connecting DATA channel proxy_id=%s peer_addr=%s", proxyID, peerAddr)
+	// peerAddr should be the peer's bind address (e.g., POD_IP:port or LOCAL_PEER_ADDR)
+	// This is different from the control connection address (remote_peer_addr)
+	logging.Logf("[server] connecting DATA channel proxy_id=%s peer_addr=%s (this should be peer's bind address, not control connection)", proxyID, peerAddr)
+	if peerAddr == "" {
+		logging.Logf("[server] ERROR: peer_addr is empty, cannot establish DATA connection proxy_id=%s", proxyID)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "data_dial_error")
+		}
+		return
+	}
 	dataConn, err := net.DialTimeout("tcp", peerAddr, dialTimeout)
 	if err != nil {
-		logging.Logf("[server] DATA dial failed proxy_id=%s peer_addr=%s err=%v", proxyID, peerAddr, err)
+		logging.Logf("[server] DATA dial failed proxy_id=%s peer_addr=%s err=%v (this address might be incorrect - check if it's the control connection address instead of bind address)", proxyID, peerAddr, err)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}
 		return
 	}
 	defer dataConn.Close()
+	logging.Logf("[server] DATA channel connected proxy_id=%s peer_addr=%s local=%s remote=%s", proxyID, peerAddr, dataConn.LocalAddr(), dataConn.RemoteAddr())
 
 	// Step 3: Send DATA header to identify this connection
 	if _, err := dataConn.Write([]byte(protocol.FormatData(proxyID))); err != nil {
@@ -643,8 +653,8 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 		connRemote = conn.RemoteAddr().String()
 	}
 
-	logging.Logf("[server] findPeerAddrByConn: searching for conn=%v, total_services=%d", connRemote, len(s.services))
-
+	logging.Logf("[server] findPeerAddrByConn: searching for conn=%v, total_services=%d total_peers=%d", connRemote, len(s.services), len(s.peerServices))
+	
 	// Debug: print all services to see what's registered
 	for key, client := range s.services {
 		if client == nil {
@@ -661,8 +671,36 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 		logging.Logf("[server] findPeerAddrByConn: service key=%s peer_id=%s peer_addr=%s ip=%s conn=%s match=%s",
 			key, client.PeerID, client.PeerAddr, client.IP, connInfo, connMatch)
 	}
+	
+	// Debug: print all peers in peerServices map
+	for peerIP, peerSvc := range s.peerServices {
+		if peerSvc != nil {
+			connInfo := "nil"
+			if peerSvc.Conn != nil && peerSvc.Conn.RemoteAddr() != nil {
+				connInfo = peerSvc.Conn.RemoteAddr().String()
+			}
+			connMatch := "no"
+			if peerSvc.Conn == conn {
+				connMatch = "YES"
+			}
+			logging.Logf("[server] findPeerAddrByConn: peer peer_ip=%s peer_id=%s peer_addr=%s conn=%s match=%s",
+				peerIP, peerSvc.PeerID, peerSvc.PeerAddr, connInfo, connMatch)
+		}
+	}
 
-	// Find any service registered with this connection
+	// First try: find from peerServices map by connection (most reliable)
+	// peerServices map now stores Conn directly, so we can match by connection
+	for peerIP, peerSvc := range s.peerServices {
+		if peerSvc != nil && peerSvc.Conn == conn {
+			if peerSvc.PeerAddr != "" {
+				logging.Logf("[server] findPeerAddrByConn: FOUND from peerServices by conn peer_ip=%s peer_id=%s peer_addr=%s", 
+					peerIP, peerSvc.PeerID, peerSvc.PeerAddr)
+				return peerSvc.PeerAddr
+			}
+		}
+	}
+	
+	// Second try: find any service registered with this connection
 	for key, client := range s.services {
 		if client == nil {
 			continue

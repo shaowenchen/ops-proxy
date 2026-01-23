@@ -449,6 +449,8 @@ func (s *ProxyServer) RegisterLocalServices(serviceAddr string, defaultName stri
 
 // GetAllServicesExcept returns all services except those from the specified source IP.
 // Used to sync service list to newly registered peers.
+// Design: Only sync LOCAL services, not services learned from other peers
+// This ensures Peer B and Peer C don't see each other's services (only see Peer A's local services)
 func (s *ProxyServer) GetAllServicesExcept(excludeIP string) []struct {
 	Name    string
 	Backend string
@@ -466,7 +468,13 @@ func (s *ProxyServer) GetAllServicesExcept(excludeIP string) []struct {
 		if c == nil || !c.Connected {
 			continue
 		}
-		// Exclude services from the specified IP
+		// Design requirement: Only sync LOCAL services
+		// Peer B and Peer C should not see each other's services
+		// Only sync services with IP="local" (this peer's own services)
+		if c.IP != "local" {
+			continue
+		}
+		// Exclude services from the specified IP (should not happen for local services)
 		if c.IP == excludeIP {
 			continue
 		}

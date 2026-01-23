@@ -175,7 +175,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				logging.Logf("[registry] acknowledgment sent (remote=%s bytes=%d)", clientIP, n)
 			}
 
-			// Send our service list to the newly registered peer (bidirectional sync)
+			// Send our LOCAL service list to the newly registered peer (bidirectional sync)
+			// Design: Only sync local services, not services from other peers
+			// This ensures Peer B and Peer C don't see each other's services
 			// Send immediately after OK to ensure client receives it
 			allServices := s.GetAllServicesExcept(clientIP)
 			if len(allServices) > 0 {

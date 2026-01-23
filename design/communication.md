@@ -28,6 +28,15 @@ Peer A 通过 IP 192.0.2.1:6443 对外暴露。
 
 ## 2. 服务注册阶段
 
+### 2.1 Peer 的相互发现
+
+通过 REMOTE_PEER_ADDR 配置，Peer 可以相互发现
+
+- 只有通过 REMOTE_PEER_ADDR 配置连接的 Peer 相互自己本地注册的 svc 列表，转发流量
+- Peer B 和 Peer C 看不到彼此的本地 svc 列表，但是 Peer A 可以看到 Peer B 和 Peer C 的本地 svc 列表
+
+### 2.2 Peer services 同步
+
 - Peer B 和 Peer C 会定期发送 REGISTER 命令到 Peer A，用于更新整个 peer 集群的服务列表
 - Peer A 会推送整个 peer 集群的服务列表到 Peer B 和 Peer C
 
@@ -43,6 +52,7 @@ Peer A 通过 IP 192.0.2.1:6443 对外暴露。
 每个 Peer 都可能有一个 REMOTE_PEER_ADDR 配置，用于提供给其他 Peer 连接到自己。
 
 REMOTE_PEER_ADDR 只是用于连接到其他 Peer，不作为 Peer 的唯一标识。
+
 
 ## 3. 数据转发阶段
 

@@ -282,49 +282,47 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				// Find the peer that sent FORWARD to establish DATA connection back
 				// This is critical: we need the peer's bind address (PeerAddr), not the control connection address
 				sourcePeerAddr := s.findPeerAddrByConn(conn)
+				connRemoteIP := ""
+				if conn != nil && conn.RemoteAddr() != nil {
+					remoteAddr := conn.RemoteAddr()
+					if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
+						connRemoteIP = tcpAddr.IP.String()
+					} else {
+						addrStr := remoteAddr.String()
+						if idx := strings.LastIndex(addrStr, ":"); idx > 0 {
+							connRemoteIP = addrStr[:idx]
+						}
+					}
+				}
+
 				if sourcePeerAddr == "" {
+					logging.Logf("[server] findPeerAddrByConn returned empty, trying fallback methods conn_remote_ip=%s", connRemoteIP)
 					// If findPeerAddrByConn failed, try to find by connection's remote IP
 					// This handles cases where the peer hasn't sent SYNC yet, or the connection doesn't match
-					if conn != nil && conn.RemoteAddr() != nil {
-						remoteAddr := conn.RemoteAddr()
-						remoteIP := ""
-						if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
-							remoteIP = tcpAddr.IP.String()
+					if connRemoteIP != "" {
+						// First try: find from peerServices map by IP (most reliable)
+						if peerSvc, exists := s.peerServices[connRemoteIP]; exists && peerSvc != nil && peerSvc.PeerAddr != "" {
+							sourcePeerAddr = peerSvc.PeerAddr
+							logging.Logf("[server] found peer_addr=%s from peerServices by IP=%s peer_id=%s", sourcePeerAddr, connRemoteIP, peerSvc.PeerID)
 						} else {
-							addrStr := remoteAddr.String()
-							if idx := strings.LastIndex(addrStr, ":"); idx > 0 {
-								remoteIP = addrStr[:idx]
-							}
-						}
-
-						// Try to find peer address from peerServices map by IP
-						if remoteIP != "" {
-							if peerSvc, exists := s.peerServices[remoteIP]; exists && peerSvc != nil && peerSvc.PeerAddr != "" {
-								sourcePeerAddr = peerSvc.PeerAddr
-								logging.Logf("[server] found peer_addr=%s from peerServices by IP=%s", sourcePeerAddr, remoteIP)
-							} else {
-								// Try to find any service from this peer IP that has PeerAddr
-								for key, client := range s.services {
-									if client != nil && client.IP == remoteIP && client.IP != "local" && client.PeerAddr != "" {
-										sourcePeerAddr = client.PeerAddr
-										logging.Logf("[server] found peer_addr=%s from services by IP=%s key=%s", sourcePeerAddr, remoteIP, key)
-										break
-									}
+							// Second try: find any service from this peer IP that has PeerAddr
+							for key, client := range s.services {
+								if client != nil && client.IP == connRemoteIP && client.IP != "local" && client.PeerAddr != "" {
+									sourcePeerAddr = client.PeerAddr
+									logging.Logf("[server] found peer_addr=%s from services by IP=%s key=%s peer_id=%s", sourcePeerAddr, connRemoteIP, key, client.PeerID)
+									break
 								}
 							}
 						}
 
-						// Last resort: use connection's remote address as fallback
-						// This might work if peer's bind address is the same as control connection address
 						if sourcePeerAddr == "" {
-							sourcePeerAddr = conn.RemoteAddr().String()
-							logging.Logf("[server] WARNING: using conn.RemoteAddr() as fallback for peer_addr: %s (this might be incorrect if peer uses different bind address)", sourcePeerAddr)
+							logging.Logf("[server] ERROR: cannot determine peer_addr for FORWARD request (conn_remote_ip=%s, peer may not have sent SYNC with PeerAddr yet)", connRemoteIP)
 						}
 					} else {
 						logging.Logf("[server] ERROR: cannot determine peer_addr for FORWARD request (conn is nil or has no RemoteAddr)")
 					}
 				} else {
-					logging.Logf("[server] found peer_addr=%s from registered services", sourcePeerAddr)
+					logging.Logf("[server] found peer_addr=%s from registered services (conn_remote_ip=%s)", sourcePeerAddr, connRemoteIP)
 				}
 
 				// Log whether service is local or remote
@@ -551,6 +549,15 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
 	logging.Logf("[server] handling FORWARD proxy_id=%s name=%s backend=%s from_addr=%s", proxyID, name, backendAddr, peerAddr)
 
+	// Validate peerAddr before proceeding
+	if peerAddr == "" {
+		logging.Logf("[server] ERROR: peer_addr is empty in handleForwardRequest, cannot establish DATA connection proxy_id=%s", proxyID)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "data_dial_error")
+		}
+		return
+	}
+
 	dialTimeout := 5 * time.Second
 	if cfg != nil {
 		dialTimeout = cfg.GetDialTimeout()
@@ -572,22 +579,20 @@ func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr 
 	// Step 2: Connect back to requesting peer for DATA channel
 	// peerAddr should be the peer's bind address (e.g., POD_IP:port or LOCAL_PEER_ADDR)
 	// This is different from the control connection address (remote_peer_addr)
-	logging.Logf("[server] connecting DATA channel proxy_id=%s peer_addr=%s (this should be peer's bind address, not control connection)", proxyID, peerAddr)
-	if peerAddr == "" {
-		logging.Logf("[server] ERROR: peer_addr is empty, cannot establish DATA connection proxy_id=%s", proxyID)
-		if s.collector != nil {
-			s.collector.RecordProxyError(name, "data_dial_error")
-		}
-		return
-	}
+	logging.Logf("[server] connecting DATA channel proxy_id=%s peer_addr=%s timeout=%s (this should be peer's bind address, not control connection)", proxyID, peerAddr, dialTimeout)
+
+	// Attempt to dial DATA connection
+	startDial := time.Now()
 	dataConn, err := net.DialTimeout("tcp", peerAddr, dialTimeout)
+	dialDuration := time.Since(startDial)
 	if err != nil {
-		logging.Logf("[server] DATA dial failed proxy_id=%s peer_addr=%s err=%v (this address might be incorrect - check if it's the control connection address instead of bind address)", proxyID, peerAddr, err)
+		logging.Logf("[server] DATA dial failed proxy_id=%s peer_addr=%s err=%v duration=%s (this address might be incorrect - check if it's the control connection address instead of bind address)", proxyID, peerAddr, err, dialDuration)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}
 		return
 	}
+	logging.Logf("[server] DATA dial succeeded proxy_id=%s peer_addr=%s duration=%s", proxyID, peerAddr, dialDuration)
 	defer dataConn.Close()
 	logging.Logf("[server] DATA channel connected proxy_id=%s peer_addr=%s local=%s remote=%s", proxyID, peerAddr, dataConn.LocalAddr(), dataConn.RemoteAddr())
 

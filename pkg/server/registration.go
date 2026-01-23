@@ -250,9 +250,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 						sourcePeerAddr = conn.RemoteAddr().String()
 					}
 				}
-				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_peer=%s", proxyID, name, backendAddr, sourcePeerAddr)
+				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_addr=%s", proxyID, name, backendAddr, sourcePeerAddr)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] FORWARD command received (from_peer=%s proxy_id=%s name=%s backend=%s)", sourcePeerAddr, proxyID, name, backendAddr)
+					logging.Logf("[request][debug] FORWARD command received (from_addr=%s proxy_id=%s name=%s backend=%s)", sourcePeerAddr, proxyID, name, backendAddr)
 				}
 				// Handle FORWARD request: connect to backend and establish DATA connection
 				// Run in goroutine to avoid blocking the control connection
@@ -292,7 +292,15 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 			connInfo = "no-remote-addr"
 		}
 	}
-	logging.Logf("[registry] processing SYNC (peer=%s count=%d conn=%v conn_info=%s)", peerIP, len(regs), conn != nil, connInfo)
+	
+	// Extract peer_id from registrations
+	var syncPeerID string
+	if len(regs) > 0 {
+		syncPeerID = regs[0].PeerID
+	}
+	
+	logging.Logf("[registry] processing SYNC (peer_id=%s remote_peer_addr=%s count=%d conn=%v conn_info=%s)", 
+		syncPeerID, peerIP, len(regs), conn != nil, connInfo)
 
 	// Step 1: Update peerServices map (store Peer B's complete service list)
 	s.peerServicesLock.Lock()
@@ -332,13 +340,14 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	// (e.g., when connecting through a load balancer)
 	if peerConn == nil {
 		s.clientsLock.RLock()
-		logging.Logf("[registry] SYNC conn is nil, searching for peer connection (peer=%s services_count=%d)", peerIP, len(s.services))
+		logging.Logf("[registry] SYNC conn is nil, searching for peer connection (peer_id=%s remote_peer_addr=%s services_count=%d)", 
+			syncPeerID, peerIP, len(s.services))
 		for key, svc := range s.services {
 			if svc != nil && svc.IP == peerIP {
 				logging.Logf("[registry] found service from peer key=%s ip=%s conn=%v connected=%t", key, svc.IP, svc.Conn != nil, svc.Connected)
 				if svc.Conn != nil && svc.Connected {
 					peerConn = svc.Conn
-					logging.Logf("[registry] using existing connection for peer=%s", peerIP)
+					logging.Logf("[registry] using existing connection for peer_id=%s remote_peer_addr=%s", syncPeerID, peerIP)
 					break
 				}
 			}
@@ -371,7 +380,8 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	}
 
 	if peerConn == nil {
-		logging.Logf("[registry] ERROR: no connection available for peer=%s, services will be registered but cannot be forwarded", peerIP)
+		logging.Logf("[registry] ERROR: no connection available for peer_id=%s remote_peer_addr=%s, services will be registered but cannot be forwarded", 
+			syncPeerID, peerIP)
 		logging.Logf("[registry] DEBUG: conn parameter was %v, peerIP=%s", conn != nil, peerIP)
 		if conn != nil {
 			remoteAddr := ""
@@ -385,15 +395,15 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 		if peerConn.RemoteAddr() != nil {
 			remoteAddr = peerConn.RemoteAddr().String()
 		}
-		logging.Logf("[registry] using connection for peer=%s (conn=%v remote=%s)", peerIP, peerConn != nil, remoteAddr)
+		logging.Logf("[registry] using connection for peer_id=%s remote_peer_addr=%s (conn=%v remote=%s)", 
+			syncPeerID, peerIP, peerConn != nil, remoteAddr)
 	}
 
 	// Step 2: Also register to services map (for routing lookup)
 	// This allows the service to be found during routing
-	// Extract peer_id and peer_addr from first registration (all should have the same)
-	var syncPeerID, syncPeerAddr string
+	// Extract peer_addr from first registration (syncPeerID already extracted above)
+	syncPeerAddr := ""
 	if len(regs) > 0 {
-		syncPeerID = regs[0].PeerID
 		syncPeerAddr = regs[0].PeerAddr
 	}
 	for _, reg := range regs {
@@ -402,11 +412,12 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 		if name == "" || backend == "" {
 			continue
 		}
-		logging.Logf("[registry] registering synced service name=%q backend=%q peer=%s peer_id=%q peer_addr=%q conn=%v", name, backend, peerIP, syncPeerID, syncPeerAddr, peerConn != nil)
+		logging.Logf("[registry] registering synced service name=%q backend=%q peer_id=%q remote_peer_addr=%s peer_addr=%q conn=%v", 
+			name, backend, syncPeerID, peerIP, syncPeerAddr, peerConn != nil)
 		s.RegisterClientByNameWithPeerInfo(name, peerIP, backend, peerConn, syncPeerID, syncPeerAddr)
 	}
 
-	logging.Logf("[registry] updated peer services (peer=%s count=%d)", peerIP, len(peerSvc.Services))
+	logging.Logf("[registry] updated peer services (peer_id=%s remote_peer_addr=%s count=%d)", syncPeerID, peerIP, len(peerSvc.Services))
 
 	// Step 3: Print full peerServices map structure
 	// Design doc requirement: print complete peerServices map structure
@@ -421,7 +432,7 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 // 3. Peer A establishes DATA connection back to Peer B
 // 4. Bridge data between client request and backend response
 func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
-	logging.Logf("[server] handling FORWARD proxy_id=%s name=%s backend=%s from_peer=%s", proxyID, name, backendAddr, peerAddr)
+	logging.Logf("[server] handling FORWARD proxy_id=%s name=%s backend=%s from_addr=%s", proxyID, name, backendAddr, peerAddr)
 
 	dialTimeout := 5 * time.Second
 	if cfg != nil {
@@ -442,10 +453,10 @@ func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr 
 	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s", proxyID, backendAddr, backendConn.LocalAddr())
 
 	// Step 2: Connect back to requesting peer for DATA channel
-	logging.Logf("[server] connecting DATA channel proxy_id=%s peer=%s", proxyID, peerAddr)
+	logging.Logf("[server] connecting DATA channel proxy_id=%s peer_addr=%s", proxyID, peerAddr)
 	dataConn, err := net.DialTimeout("tcp", peerAddr, dialTimeout)
 	if err != nil {
-		logging.Logf("[server] DATA dial failed proxy_id=%s peer=%s err=%v", proxyID, peerAddr, err)
+		logging.Logf("[server] DATA dial failed proxy_id=%s peer_addr=%s err=%v", proxyID, peerAddr, err)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}

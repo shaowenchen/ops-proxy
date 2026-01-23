@@ -329,8 +329,23 @@ func (s *ProxyServer) logPeerServicesMap() {
 		if peerSvc == nil {
 			continue
 		}
-		logging.Logf("[registry] peer_services_map peer_id=%s   peer=%s {services=%d last_sync=%d}", 
-			peerID, peerIP, len(peerSvc.Services), peerSvc.LastSync)
+		// peerIP is the remote_peer_addr (connection address)
+		// Extract peer_id from first service if available
+		var remotePeerID string
+		if len(peerSvc.Services) > 0 {
+			for _, svc := range peerSvc.Services {
+				if svc != nil && svc.SourcePeer != "" {
+					// SourcePeer might be peer_id or IP, use what we have
+					remotePeerID = svc.SourcePeer
+					break
+				}
+			}
+		}
+		if remotePeerID == "" {
+			remotePeerID = peerIP
+		}
+		logging.Logf("[registry] peer_services_map peer_id=%s   remote_peer_id=%s remote_peer_addr=%s {services=%d last_sync=%d}", 
+			peerID, remotePeerID, peerIP, len(peerSvc.Services), peerSvc.LastSync)
 		
 		if len(peerSvc.Services) > 0 {
 			logging.Logf("[registry] peer_services_map peer_id=%s     | name | backend |", peerID)

@@ -393,8 +393,8 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	if client.IP == "local" {
 		serviceType = "local"
 	}
-	logging.Logf("[tunnel] client found name=%s type=%s ip=%s connected=%t backend=%s", clientName, serviceType, client.IP, client.Connected, client.BackendAddr)
-	logging.Logf("[route] SELECTED service=%s type=%s backend=%s peer=%s", clientName, serviceType, client.BackendAddr, client.IP)
+	logging.Logf("[tunnel] client found name=%s type=%s remote_peer_addr=%s connected=%t backend=%s", clientName, serviceType, client.IP, client.Connected, client.BackendAddr)
+	logging.Logf("[route] SELECTED service=%s type=%s backend=%s peer_id=%s", clientName, serviceType, client.BackendAddr, client.PeerID)
 
 	// Determine forwarding method based on service location (local vs remote peer)
 	// According to design document:
@@ -434,14 +434,14 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	// Extract domain from Host/SNI, lookup in services map, found it's a service from Peer A
 	// Generate unique proxy_id, send FORWARD command to Peer A
 
-	logging.Logf("[route] DECISION: forward to next proxy - name=%s peer=%s peer_id=%s backend=%s client=%s",
-		clientName, client.IP, client.PeerID, client.BackendAddr, remote)
+	logging.Logf("[route] DECISION: forward to next proxy - name=%s peer_id=%s remote_peer_addr=%s backend=%s client=%s",
+		clientName, client.PeerID, client.IP, client.BackendAddr, remote)
 
 	// Check connection is available for remote services
 	if !client.Connected {
-		logging.Logf("[tunnel] Remote client %s (peer=%s) not connected - cannot forward", clientName, client.IP)
+		logging.Logf("[tunnel] Remote client %s (peer_id=%s remote_peer_addr=%s) not connected - cannot forward", clientName, client.PeerID, client.IP)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] remote client not connected (remote=%s name=%s peer=%s)", remote, clientName, client.IP)
+			logging.Logf("[request][debug] remote client not connected (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "remote_not_connected")
@@ -455,9 +455,9 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 
 	if client.Conn == nil {
-		logging.Logf("[tunnel] Remote client %s (peer=%s) connection is nil - cannot forward", clientName, client.IP)
+		logging.Logf("[tunnel] Remote client %s (peer_id=%s remote_peer_addr=%s) connection is nil - cannot forward", clientName, client.PeerID, client.IP)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] remote client conn is nil (remote=%s name=%s peer=%s)", remote, clientName, client.IP)
+			logging.Logf("[request][debug] remote client conn is nil (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "remote_conn_nil")
@@ -472,10 +472,10 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 	// Verify connection is still valid by checking remote address
 	if client.Conn.RemoteAddr() == nil {
-		logging.Logf("[tunnel] Remote client %s (peer=%s) connection is closed - cannot forward", clientName, client.IP)
+		logging.Logf("[tunnel] Remote client %s (peer_id=%s remote_peer_addr=%s) connection is closed - cannot forward", clientName, client.PeerID, client.IP)
 		client.Connected = false
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] remote client conn is closed (remote=%s name=%s peer=%s)", remote, clientName, client.IP)
+			logging.Logf("[request][debug] remote client conn is closed (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "remote_conn_closed")
@@ -488,7 +488,8 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		return
 	}
 
-	logging.Logf("[tunnel] remote service ready name=%s peer=%s conn=%v connected=%t backend=%s", clientName, client.IP, client.Conn != nil, client.Connected, client.BackendAddr)
+	logging.Logf("[tunnel] remote service ready name=%s peer_id=%s remote_peer_addr=%s conn=%v connected=%t backend=%s", 
+		clientName, client.PeerID, client.IP, client.Conn != nil, client.Connected, client.BackendAddr)
 
 	// Log selected backend details after route selection.
 	if cfg != nil && cfg.Log.Level == "debug" {
@@ -497,7 +498,8 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 			backend = net.JoinHostPort(client.IP, "80")
 		}
 		logging.Logf("[request][debug] selected backend (remote=%s name=%s protocol=%s backend=%s)", remote, clientName, protocol, backend)
-		logging.Logf("[request][debug] starting tunnel forward (remote=%s name=%s protocol=%s backend=%s peer=%s)", remote, clientName, protocol, client.BackendAddr, client.IP)
+		logging.Logf("[request][debug] starting tunnel forward (remote=%s name=%s protocol=%s backend=%s peer_id=%s remote_peer_addr=%s)", 
+			remote, clientName, protocol, client.BackendAddr, client.PeerID, client.IP)
 	}
 
 	// Metrics callback
@@ -520,9 +522,10 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	// 2. Send FORWARD command: FORWARD:proxy_id:name:backend\n
 	// 3. Wait for DATA connection with matching proxy_id
 	// 4. Bridge data streams
-	logging.Logf("[route] FORWARDING to next proxy - name=%s peer=%s peer_id=%s backend=%s protocol=%s client=%s",
-		clientName, client.IP, client.PeerID, client.BackendAddr, protocol, remote)
-	logging.Logf("[tunnel] forwarding via tunnel name=%s backend=%s peer=%s protocol=%s", clientName, client.BackendAddr, client.IP, protocol)
+	logging.Logf("[route] FORWARDING to next proxy - name=%s peer_id=%s remote_peer_addr=%s backend=%s protocol=%s client=%s",
+		clientName, client.PeerID, client.IP, client.BackendAddr, protocol, remote)
+	logging.Logf("[tunnel] forwarding via tunnel name=%s backend=%s peer_id=%s remote_peer_addr=%s protocol=%s", 
+		clientName, client.BackendAddr, client.PeerID, client.IP, protocol)
 	s.forwardOnce(bufConn, conn, clientName, protocol, client, cfg, updateMetrics, "")
 }
 
@@ -705,7 +708,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 
 	// Double-check connection is still valid before writing
 	if client.Conn == nil {
-		logging.Logf("[tunnel] connection is nil before sending FORWARD name=%s peer=%s", name, client.IP)
+		logging.Logf("[tunnel] connection is nil before sending FORWARD name=%s peer_id=%s", name, client.PeerID)
 		client.Connected = false
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "forward_conn_nil")
@@ -723,7 +726,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	if client.Conn.RemoteAddr() != nil {
 		remoteAddr = client.Conn.RemoteAddr().String()
 	} else {
-		logging.Logf("[tunnel] connection remote address is nil (connection closed) name=%s peer=%s", name, client.IP)
+		logging.Logf("[tunnel] connection remote address is nil (connection closed) name=%s peer_id=%s", name, client.PeerID)
 		client.Connected = false
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "forward_conn_closed")
@@ -737,13 +740,14 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	// Format FORWARD command according to design doc
 	// Format: FORWARD:proxy_id:name:backend_addr\n
 	cmd := wire.FormatForward(proxyID, name, backendAddr)
-	logging.Logf("[tunnel] SENDING FORWARD proxy_id=%s name=%s backend=%s peer=%s client=%s", proxyID, name, backendAddr, client.IP, remote)
+	logging.Logf("[tunnel] SENDING FORWARD proxy_id=%s name=%s backend=%s peer_id=%s remote_peer_addr=%s client=%s", 
+		proxyID, name, backendAddr, client.PeerID, client.IP, remote)
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[request][debug] FORWARD command (proxy_id=%s cmd=%q peer_remote=%s)", proxyID, strings.TrimSpace(cmd), remoteAddr)
 	}
 	_, err := client.Conn.Write([]byte(cmd))
 	if err != nil {
-		logging.Logf("[tunnel] FORWARD send failed proxy_id=%s name=%s peer=%s err=%v", proxyID, name, client.IP, err)
+		logging.Logf("[tunnel] FORWARD send failed proxy_id=%s name=%s peer_id=%s err=%v", proxyID, name, client.PeerID, err)
 		client.Connected = false
 		// Unregister all services from this connection to prevent further attempts
 		s.UnregisterClientsByConn(client.Conn)
@@ -755,7 +759,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		}
 		return
 	}
-	logging.Logf("[tunnel] FORWARD sent successfully proxy_id=%s name=%s peer=%s", proxyID, name, client.IP)
+	logging.Logf("[tunnel] FORWARD sent successfully proxy_id=%s name=%s peer_id=%s", proxyID, name, client.PeerID)
 	if s.collector != nil {
 		s.collector.RecordForwardCommand(name)
 	}
@@ -784,7 +788,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 			logging.Logf("[request][debug] bridge start (remote=%s name=%s protocol=%s proxy_id=%s)", remote, name, protocol, proxyID)
 		}
 	case <-time.After(dataTimeout):
-		logging.Logf("[tunnel] DATA timeout proxy_id=%s name=%s peer=%s timeout=%s", proxyID, name, client.IP, dataTimeout)
+		logging.Logf("[tunnel] DATA timeout proxy_id=%s name=%s peer_id=%s timeout=%s", proxyID, name, client.PeerID, dataTimeout)
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] DATA connection timeout (proxy_id=%s client=%s name=%s timeout=%s)", proxyID, remote, name, dataTimeout)
 		}

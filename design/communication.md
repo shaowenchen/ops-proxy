@@ -30,7 +30,7 @@ Peer A 通过 IP 192.0.2.1:6443 对外暴露。
 
 ### 2.1 Peer 的相互发现
 
-通过 REMOTE_PEER_ADDR 配置，Peer 可以相互发现
+通过 REMOTE_PEER_ADDR 配置，Peer 可以相互发现，REMOTE_PEER_ADDR 可以配置多个
 
 - 只有通过 REMOTE_PEER_ADDR 配置连接的 Peer 相互自己本地注册的 svc 列表，转发流量
 - Peer B 和 Peer C 看不到彼此的本地 svc 列表，但是 Peer A 可以看到 Peer B 和 Peer C 的本地 svc 列表

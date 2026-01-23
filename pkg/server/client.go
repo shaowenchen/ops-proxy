@@ -270,6 +270,60 @@ func (s *ProxyServer) GetClient(name string) *types.ClientInfo {
 	return candidates[0]
 }
 
+// GetClientByPeerID finds a client connection by peer ID
+// Returns the first connected client from the specified peer ID
+func (s *ProxyServer) GetClientByPeerID(peerID string) *types.ClientInfo {
+	if peerID == "" {
+		return nil
+	}
+	
+	logging.Logf("[GetClientByPeerID] searching for peer_id=%q services_count=%d", peerID, len(s.services))
+	
+	// First, try to find from peerServices map
+	for peerIP, peerSvc := range s.peerServices {
+		if peerSvc != nil && peerSvc.PeerID == peerID {
+			if peerSvc.Conn != nil && peerSvc.Conn.RemoteAddr() != nil {
+				// Find any service from this peer to get connection info
+				for _, svc := range peerSvc.Services {
+					if svc != nil {
+						// Create a ClientInfo from peer service
+						client := &types.ClientInfo{
+							Name:        svc.Name,
+							IP:          peerIP,
+							BackendAddr: svc.BackendAddr,
+							PeerID:      peerID,
+							PeerAddr:    peerSvc.PeerAddr,
+							Conn:        peerSvc.Conn,
+							Connected:   true,
+							LastSeen:    time.Now(),
+						}
+						logging.Logf("[GetClientByPeerID] found from peerServices peer_id=%s name=%s backend=%s", peerID, svc.Name, svc.BackendAddr)
+						return client
+					}
+				}
+			}
+		}
+	}
+	
+	// Second, try to find from services map
+	for key, client := range s.services {
+		if client == nil {
+			continue
+		}
+		clientPeerID := client.PeerID
+		if clientPeerID == "" {
+			clientPeerID = client.IP
+		}
+		if clientPeerID == peerID && client.Connected && client.Conn != nil {
+			logging.Logf("[GetClientByPeerID] found from services key=%s peer_id=%s name=%s backend=%s", key, peerID, client.Name, client.BackendAddr)
+			return client
+		}
+	}
+	
+	logging.Logf("[GetClientByPeerID] no client found for peer_id=%q", peerID)
+	return nil
+}
+
 // GetClients gets all clients (for metrics collection)
 // The returned map key is the registered name
 func (s *ProxyServer) GetClients() map[string]*types.ClientInfo {

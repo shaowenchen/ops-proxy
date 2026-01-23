@@ -7,6 +7,8 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -194,6 +196,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 	// Forward proxy (HTTP CONNECT).
 	// HTTP CONNECT directly forwards to target address (no service routing needed)
+	// But if ALL_PROXY is set, route through the specified peer ID
 	if protocol == "http_connect" {
 		host, port, ok := proxy.ExtractConnectHostPort(initial)
 		if !ok {
@@ -207,6 +210,50 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] HTTP CONNECT request (remote=%s target=%s)", remote, targetAddr)
+		}
+
+		// Check if ALL_PROXY is set with peer ID
+		allProxyPeerID := parseAllProxyPeerID()
+		if allProxyPeerID != "" {
+			proxyClient := s.GetClientByPeerID(allProxyPeerID)
+			if proxyClient != nil && proxyClient.Connected && proxyClient.Conn != nil {
+				// Route through the specified peer ID
+				logging.Logf("[route] HTTP CONNECT routing through ALL_PROXY peer_id=%s target=%s", allProxyPeerID, targetAddr)
+				// Create a virtual service entry for routing
+				virtualClient := &types.ClientInfo{
+					Name:        targetAddr, // Use target address as service name
+					IP:          proxyClient.IP,
+					BackendAddr: targetAddr,
+					PeerID:      allProxyPeerID,
+					PeerAddr:    proxyClient.PeerAddr,
+					Conn:        proxyClient.Conn,
+					Connected:   true,
+					LastSeen:    time.Now(),
+				}
+				// Forward through the peer
+				end := proxy.FindHTTPEndOfHeaders(initial)
+				pos := n
+				if end >= 0 {
+					pos = end + 4
+					if pos > n {
+						pos = n
+					}
+				}
+				bufConn := &proxy.BufferedConn{
+					Conn: conn,
+					Buf:  initial,
+					Pos:  pos,
+				}
+				updateMetrics := func(clientName, protocol string, success bool, bytesTx, bytesRx int64, duration time.Duration) {
+					if s.collector != nil {
+						s.collector.UpdateConnectionMetrics(clientName, protocol, success, bytesTx, bytesRx, duration)
+					}
+				}
+				s.forwardOnce(bufConn, conn, targetAddr, "http_connect", virtualClient, cfg, updateMetrics, targetAddr)
+				return
+			} else {
+				logging.Logf("[route] ALL_PROXY peer_id=%s not found or not connected for HTTP CONNECT, using direct forward", allProxyPeerID)
+			}
 		}
 
 		end := proxy.FindHTTPEndOfHeaders(initial)
@@ -321,18 +368,47 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 
 	// Get client and immediately log service type (local or remote) for visibility
-	logging.Logf("[route] calling GetClient name=%q", clientName)
 	var client *types.ClientInfo
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logging.Logf("[route] panic in GetClient: %v", r)
-				client = nil
+
+	// Check if ALL_PROXY is set with peer ID format: socks5://peerid:port
+	// If set, route all requests through that peer ID
+	allProxyPeerID := parseAllProxyPeerID()
+	if allProxyPeerID != "" {
+		logging.Logf("[route] ALL_PROXY peer_id=%s detected, routing through peer", allProxyPeerID)
+		proxyClient := s.GetClientByPeerID(allProxyPeerID)
+		if proxyClient != nil && proxyClient.Connected && proxyClient.Conn != nil {
+			// Use the peer ID's connection to forward the request
+			// Create a virtual service entry for routing
+			client = &types.ClientInfo{
+				Name:        clientName,
+				IP:          proxyClient.IP,
+				BackendAddr: clientName, // Use clientName as backend (will be forwarded to peer)
+				PeerID:      allProxyPeerID,
+				PeerAddr:    proxyClient.PeerAddr,
+				Conn:        proxyClient.Conn,
+				Connected:   true,
+				LastSeen:    time.Now(),
 			}
+			logging.Logf("[route] using ALL_PROXY peer_id=%s for routing name=%s", allProxyPeerID, clientName)
+		} else {
+			logging.Logf("[route] ALL_PROXY peer_id=%s not found or not connected, falling back to normal routing", allProxyPeerID)
+		}
+	}
+
+	// If not using ALL_PROXY or peer not found, use normal routing
+	if client == nil {
+		logging.Logf("[route] calling GetClient name=%q", clientName)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Logf("[route] panic in GetClient: %v", r)
+					client = nil
+				}
+			}()
+			client = s.GetClient(clientName)
 		}()
-		client = s.GetClient(clientName)
-	}()
-	logging.Logf("[route] GetClient returned client=%v", client != nil)
+		logging.Logf("[route] GetClient returned client=%v", client != nil)
+	}
 	if client != nil {
 		serviceType := "remote"
 		if client.IP == "local" {
@@ -847,6 +923,37 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[request][debug] bridge done (remote=%s name=%s protocol=%s proxy_id=%s bytes_tx=%d bytes_rx=%d duration=%s success=%t err=%v)", remote, name, protocol, proxyID, bytesTx, bytesRx, time.Since(start), success, err)
 	}
+}
+
+// parseAllProxyPeerID parses ALL_PROXY environment variable to extract peer ID
+// Format: socks5://peerid:port or http://peerid:port
+// Returns the peer ID if found, empty string otherwise
+func parseAllProxyPeerID() string {
+	allProxy := os.Getenv("ALL_PROXY")
+	if allProxy == "" {
+		return ""
+	}
+
+	// Parse URL
+	u, err := url.Parse(allProxy)
+	if err != nil {
+		logging.Logf("[route] failed to parse ALL_PROXY=%q: %v", allProxy, err)
+		return ""
+	}
+
+	// Extract hostname (which should be the peer ID)
+	peerID := u.Hostname()
+	if peerID == "" {
+		return ""
+	}
+
+	// Remove port if present (format: peerid:port)
+	if idx := strings.Index(peerID, ":"); idx > 0 {
+		peerID = peerID[:idx]
+	}
+
+	logging.Logf("[route] parsed ALL_PROXY=%q -> peer_id=%q", allProxy, peerID)
+	return peerID
 }
 
 func generateProxyID() string {

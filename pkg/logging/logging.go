@@ -15,8 +15,11 @@ var (
 // GetPeerID returns the unique peer ID for this instance
 func GetPeerID() string {
 	peerIDOnce.Do(func() {
-		// Try POD_NAME first, then HOSTNAME, then generate a short ID
-		peerID = os.Getenv("POD_NAME")
+		// Try PEER_ID first (allows fixed peer ID), then POD_NAME, then HOSTNAME, then generate a short ID
+		peerID = os.Getenv("PEER_ID")
+		if peerID == "" {
+			peerID = os.Getenv("POD_NAME")
+		}
 		if peerID == "" {
 			peerID = os.Getenv("HOSTNAME")
 		}

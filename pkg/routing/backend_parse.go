@@ -15,7 +15,7 @@ func isPortNumber(s string) bool {
 // - If address is only a port number (e.g., "6443"), prepend defaultHost.
 // - If address is hostname without port, append ":80".
 // Returns normalized address in "host:port" format.
-// Design requirement: if addr is empty, return empty (no default value)
+// Design requirement: if addr is empty or invalid, return empty (no default value)
 func NormalizeBackendAddr(addr string, defaultHost string) string {
 	addr = strings.TrimSpace(addr)
 	if addr == "" {
@@ -26,17 +26,23 @@ func NormalizeBackendAddr(addr string, defaultHost string) string {
 	if strings.Contains(addr, ":") {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			return net.JoinHostPort(defaultHost, "80")
+			// Invalid format (e.g., "name:host:port" with multiple colons)
+			// Design requirement: don't use default value, return empty
+			return ""
 		}
 		if host == "" {
-			host = defaultHost
+			// Only port provided (e.g., ":6443")
+			// Design requirement: don't use default value, return empty
+			return ""
 		}
 		return net.JoinHostPort(host, port)
 	}
 
 	// No colon, check if it's a valid port number
 	if isPortNumber(addr) {
-		return net.JoinHostPort(defaultHost, addr)
+		// Only port without host - invalid for remote backend
+		// Design requirement: don't use default value, return empty
+		return ""
 	}
 
 	// Not a port, treat as hostname and use default port

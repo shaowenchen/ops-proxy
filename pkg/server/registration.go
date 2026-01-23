@@ -126,15 +126,23 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			_, _ = conn.Write([]byte("ERROR:Invalid registration\n"))
 			return
 		}
-		if cfg != nil && cfg.Log.Level == "debug" {
-			items := make([]string, 0, len(regs))
-			for _, r := range regs {
-				if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Backend) == "" {
-					continue
-				}
-				items = append(items, fmt.Sprintf("%s->%s", strings.TrimSpace(r.Name), strings.TrimSpace(r.Backend)))
+		
+		// Always log parsed registrations (not just in debug mode)
+		items := make([]string, 0, len(regs))
+		for _, r := range regs {
+			if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.Backend) == "" {
+				continue
 			}
-			logging.Logf("[request][debug] registration parsed (remote=%s count=%d items=%s)", clientIP, len(items), strings.Join(items, ","))
+			items = append(items, fmt.Sprintf("%s->%s", strings.TrimSpace(r.Name), strings.TrimSpace(r.Backend)))
+		}
+		logging.Logf("[registry] registration parsed (remote=%s count=%d items=%s)", clientIP, len(items), strings.Join(items, ","))
+		
+		if cfg != nil && cfg.Log.Level == "debug" {
+			// Also log raw Registration structs
+			for i, r := range regs {
+				logging.Logf("[request][debug] registration[%d]: Name=%q Backend=%q PeerID=%q PeerAddr=%q", 
+					i, r.Name, r.Backend, r.PeerID, r.PeerAddr)
+			}
 		}
 		registeredCount := 0
 		// Extract peer_id and peer_addr from first registration (all should have the same)
@@ -157,8 +165,17 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				logging.Logf("[registry] skipping service with empty backend (remote=%s name=%q)", clientIP, clientName)
 				continue
 			}
-			// Normalize backend address
+			// Normalize backend address (will return empty if invalid format)
+			originalBackend := backendAddr
 			backendAddr = routing.NormalizeBackendAddr(backendAddr, "localhost")
+			if backendAddr == "" {
+				logging.Logf("[registry] ERROR: skipping service with invalid backend format (remote=%s name=%q original_backend=%q)", clientIP, clientName, originalBackend)
+				continue
+			}
+			// Log if backend changed during normalization
+			if backendAddr != originalBackend && cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[request][debug] backend normalized (name=%q original=%q normalized=%q)", clientName, originalBackend, backendAddr)
+			}
 			if cfg != nil && cfg.Log.Level == "debug" {
 				logging.Logf("[request][debug] registering service (remote=%s name=%q backend=%q peer_id=%q peer_addr=%q)", clientIP, clientName, backendAddr, peerID, peerAddr)
 			}

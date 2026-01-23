@@ -27,6 +27,9 @@ var (
 func main() {
 	kingpin.Parse()
 
+	// Ensure async log worker is flushed on exit
+	defer logging.Flush()
+
 	// Load configuration
 	var err error
 	appConfig, err = config.LoadConfig(*configFile)
@@ -54,6 +57,8 @@ func main() {
 		<-sigChan
 		logging.Log("Received shutdown signal, shutting down gracefully...")
 		cancel()
+		// Flush logs before exit
+		logging.Flush()
 	}()
 
 	// Run as peer: always listens, and connects to other peers if REMOTE_PEER_ADDR is configured

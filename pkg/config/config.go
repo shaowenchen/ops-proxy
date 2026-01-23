@@ -110,7 +110,7 @@ func (c *Config) SetDefaults() {
 		c.Peer.ReconnectInterval = 5
 	}
 	if c.Peer.HeartbeatInterval == 0 {
-		c.Peer.HeartbeatInterval = 3 // Design doc: send heartbeat every 3 seconds
+		c.Peer.HeartbeatInterval = 10 // Heartbeat interval: 10 seconds
 	}
 
 	if c.Log.Level == "" {

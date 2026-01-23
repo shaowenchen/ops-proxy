@@ -15,7 +15,7 @@ peer:
   peer_name: ""                         # Peer name identifier (optional, defaults to POD_NAME or HOSTNAME)
   reconnect_interval: 5                 # Reconnect interval (seconds)
   max_reconnect: 0                      # Max reconnect attempts (0 means infinite)
-  heartbeat_interval: 30                # Heartbeat interval (seconds) - peer re-registers periodically to keep connection alive
+  heartbeat_interval: 10                # Heartbeat interval (seconds) - peer re-registers periodically to keep connection alive
   
   # Legacy fields (for backward compatibility)
   # server_addr: "ops-proxy-peer.example.svc.cluster.local:6443"

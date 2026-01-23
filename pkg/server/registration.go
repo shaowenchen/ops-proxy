@@ -243,7 +243,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 	}
 
 	// Keep reading subsequent REGISTER, SYNC, or FORWARD lines.
-	// Client sends periodic heartbeat (default 3s); no separate heartbeat protocol needed.
+	// Client sends periodic heartbeat (default 10s); no separate heartbeat protocol needed.
 	for {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		line, err := reader.ReadString('\n')

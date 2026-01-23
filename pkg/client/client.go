@@ -344,8 +344,8 @@ func connectToPeer(peerAddr string, registrations []struct {
 		}
 
 		// Get heartbeat interval
-		// Design doc: send heartbeat every 3 seconds
-		heartbeatInterval := 3 * time.Second
+		// Default: send heartbeat every 10 seconds
+		heartbeatInterval := 10 * time.Second
 		if cfg != nil {
 			heartbeatInterval = cfg.GetHeartbeatInterval()
 		}

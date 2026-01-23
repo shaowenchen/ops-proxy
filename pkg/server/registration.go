@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -229,21 +230,26 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			continue
 		}
 
-		// Check if it's a FORWARD command (request to forward traffic)
-		// Note: FORWARD commands are sent from server to client, not the other way around
-		// If we receive a FORWARD command here, it means the client is trying to forward to us
-		// This should not happen in normal operation, but we'll handle it gracefully
+		// Check if it's a FORWARD command (request to forward traffic from another peer)
+		// When Peer B sends FORWARD to Peer A, Peer A receives it here on the control connection
+		// Peer A should then connect to local backend and establish DATA connection back to Peer B
 		if strings.HasPrefix(line, protocol.CmdForward+":") {
 			proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line)
 			if ok {
-				logging.Logf("[registry] received FORWARD command from client (remote=%s proxy_id=%s name=%s backend=%s) - this is unexpected, client should not send FORWARD", clientIP, proxyID, name, backendAddr)
-				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] received FORWARD command from client (remote=%s proxy_id=%s name=%s backend=%s)", clientIP, proxyID, name, backendAddr)
+				// Get full remote address (IP:port) for DATA connection
+				peerAddr := ""
+				if conn != nil && conn.RemoteAddr() != nil {
+					peerAddr = conn.RemoteAddr().String()
 				}
-				// Client should not send FORWARD commands - this is a protocol error
-				// But we'll just log it and continue, as the client will handle the forwarding
+				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_peer=%s", proxyID, name, backendAddr, peerAddr)
+				if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[request][debug] FORWARD command received (remote=%s proxy_id=%s name=%s backend=%s)", peerAddr, proxyID, name, backendAddr)
+				}
+				// Handle FORWARD request: connect to backend and establish DATA connection
+				// Run in goroutine to avoid blocking the control connection
+				go s.handleForwardRequest(peerAddr, proxyID, name, backendAddr, cfg)
 			} else {
-				logging.Logf("[registry] invalid FORWARD message (remote=%s message=%q)", clientIP, line)
+				logging.Logf("[server] invalid FORWARD message (remote=%s message=%q)", clientIP, line)
 			}
 		} else if strings.HasPrefix(line, protocol.CmdSync+":") {
 			// Check if it's a SYNC command (service list from peer)
@@ -395,4 +401,117 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	// Step 3: Print full peerServices map structure
 	// Design doc requirement: print complete peerServices map structure
 	s.logPeerServicesMap()
+}
+
+// handleForwardRequest handles a FORWARD request from another peer
+// This is called when Peer A receives FORWARD command from Peer B
+// Design doc flow:
+// 1. Peer B sends: FORWARD:proxy_id:name:backend
+// 2. Peer A connects to local backend
+// 3. Peer A establishes DATA connection back to Peer B
+// 4. Bridge data between client request and backend response
+func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
+	logging.Logf("[server] handling FORWARD proxy_id=%s name=%s backend=%s from_peer=%s", proxyID, name, backendAddr, peerAddr)
+
+	dialTimeout := 5 * time.Second
+	if cfg != nil {
+		dialTimeout = cfg.GetDialTimeout()
+	}
+
+	// Step 1: Connect to local backend
+	logging.Logf("[server] connecting to backend proxy_id=%s backend=%s", proxyID, backendAddr)
+	backendConn, err := net.DialTimeout("tcp", backendAddr, dialTimeout)
+	if err != nil {
+		logging.Logf("[server] backend dial failed proxy_id=%s backend=%s err=%v", proxyID, backendAddr, err)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "backend_dial_error")
+		}
+		return
+	}
+	defer backendConn.Close()
+	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s", proxyID, backendAddr, backendConn.LocalAddr())
+
+	// Step 2: Connect back to requesting peer for DATA channel
+	logging.Logf("[server] connecting DATA channel proxy_id=%s peer=%s", proxyID, peerAddr)
+	dataConn, err := net.DialTimeout("tcp", peerAddr, dialTimeout)
+	if err != nil {
+		logging.Logf("[server] DATA dial failed proxy_id=%s peer=%s err=%v", proxyID, peerAddr, err)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "data_dial_error")
+		}
+		return
+	}
+	defer dataConn.Close()
+
+	// Step 3: Send DATA header to identify this connection
+	if _, err := dataConn.Write([]byte(protocol.FormatData(proxyID))); err != nil {
+		logging.Logf("[server] DATA header send failed proxy_id=%s err=%v", proxyID, err)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "data_header_error")
+		}
+		return
+	}
+	logging.Logf("[server] DATA channel established proxy_id=%s", proxyID)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] DATA channel connected (proxy_id=%s local=%s remote=%s)", proxyID, dataConn.LocalAddr(), dataConn.RemoteAddr())
+	}
+
+	logging.Logf("[server] bridge start proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
+
+	// Step 4: Bridge data in both directions
+	var bytesToPeer, bytesToBackend int64
+	errCh := make(chan error, 2)
+
+	go func() {
+		n, e := io.Copy(dataConn, backendConn) // backend -> peer
+		bytesToPeer = n
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[request][debug] backend->peer done (proxy_id=%s bytes=%d err=%v)", proxyID, n, e)
+		}
+		// Close write side to signal EOF to peer
+		if tcpConn, ok := dataConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
+		errCh <- e
+	}()
+
+	go func() {
+		n, e := io.Copy(backendConn, dataConn) // peer -> backend
+		bytesToBackend = n
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[request][debug] peer->backend done (proxy_id=%s bytes=%d err=%v)", proxyID, n, e)
+		}
+		// Close write side to signal EOF to backend
+		if tcpConn, ok := backendConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
+		errCh <- e
+	}()
+
+	// Wait for both directions to complete
+	err1 := <-errCh
+	err2 := <-errCh
+
+	logging.Logf("[server] bridge done proxy_id=%s name=%s bytes_to_peer=%d bytes_to_backend=%d", proxyID, name, bytesToPeer, bytesToBackend)
+
+	// Return first non-nil error
+	if err1 != nil && err1 != io.EOF {
+		logging.Logf("[server] Forward failed proxy_id=%s name=%s err=%v", proxyID, name, err1)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "forward_io_error")
+		}
+		return
+	}
+	if err2 != nil && err2 != io.EOF {
+		logging.Logf("[server] Forward failed proxy_id=%s name=%s err=%v", proxyID, name, err2)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "forward_io_error")
+		}
+		return
+	}
+
+	logging.Logf("[server] Forward succeeded proxy_id=%s name=%s", proxyID, name)
+	if s.collector != nil {
+		s.collector.RecordForwardCommand(name)
+	}
 }

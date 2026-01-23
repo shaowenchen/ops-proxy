@@ -40,6 +40,15 @@ Peer A 通过 IP 192.0.2.1:6443 对外暴露。
 
 ## 3. 数据转发阶段
 
+### 3.1 转发模式
+
+Peer 只进行两种转发:
+
+- 如果是本地的 svc，直接转发到本地 backend
+- 如果是其他 Peer 的 svc，转发到其他 Peer
+
+### 3.2 转发示例
+
 - Peer A 收到 test-cluster-a.example.com:80 的请求
 
 ```

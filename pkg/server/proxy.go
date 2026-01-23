@@ -833,7 +833,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 
 	// Wait for client to connect back with DATA:<proxy-id> on registration port.
 	var dataConn net.Conn
-	dataTimeout := 5 * time.Second
+	dataTimeout := 30 * time.Second  // Default timeout (increased from 5s to 30s)
 	if cfg != nil {
 		dataTimeout = cfg.GetConnectionTimeout()
 	}

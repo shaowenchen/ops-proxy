@@ -13,36 +13,36 @@ import (
 
 // Config application configuration structure
 type Config struct {
-	Peer PeerConfig `yaml:"peer"`
-	Log  LogConfig  `yaml:"log"`
+	Peer  PeerConfig  `yaml:"peer"`
+	Log   LogConfig   `yaml:"log"`
 	Proxy ProxyConfig `yaml:"proxy"`
 }
 
 // PeerConfig peer configuration (listening and connecting)
 type PeerConfig struct {
 	// Listening configuration
-	BindAddr                 string `yaml:"bind_addr"`                  // Local peer listening address (format: ip:port or :port, e.g., "127.0.0.1:6443" or ":6443")
-	LocalPeerAddr            string `yaml:"local_peer_addr"`            // Local peer address for other peers to connect (optional, e.g., "lb.example.com:6443"). If not set, uses POD_IP:port
-	ListenAddress            string `yaml:"listen_address"`            // Metrics listener address
-	TelemetryPath            string `yaml:"telemetry_path"`            // Metrics path
-	ConnectionTimeout        int    `yaml:"connection_timeout"`       // Timeout waiting for peer DATA connection after FORWARD (seconds)
-	RegistrationReadTimeout  int    `yaml:"registration_read_timeout"` // Registration connection read timeout in seconds
-	
+	BindAddr                string `yaml:"bind_addr"`                 // Local peer listening address (format: ip:port or :port, e.g., "127.0.0.1:6443" or ":6443")
+	LocalPeerAddr           string `yaml:"local_peer_addr"`           // Local peer address for other peers to connect (optional, e.g., "lb.example.com:6443"). If not set, uses POD_IP:port
+	ListenAddress           string `yaml:"listen_address"`            // Metrics listener address
+	TelemetryPath           string `yaml:"telemetry_path"`            // Metrics path
+	ConnectionTimeout       int    `yaml:"connection_timeout"`        // Timeout waiting for peer DATA connection after FORWARD (seconds)
+	RegistrationReadTimeout int    `yaml:"registration_read_timeout"` // Registration connection read timeout in seconds
+
 	// Connection configuration
-	RemotePeerAddr    string          `yaml:"remote_peer_addr"`  // Comma-separated list of remote peer addresses to connect to (e.g., "peer1:6443,peer2:6443")
-	ServiceAddr       string          `yaml:"service_addr"`      // Comma-separated list of local services to register (e.g., "example-cluster.example.com:6443,example-app:example-app.default.svc.cluster.local:80")
-	PeerName          string          `yaml:"peer_name"`         // Peer name identifier (optional, defaults to POD_NAME or HOSTNAME)
+	RemotePeerAddr string `yaml:"remote_peer_addr"` // Comma-separated list of remote peer addresses to connect to (e.g., "peer1:6443,peer2:6443")
+	ServiceAddr    string `yaml:"service_addr"`     // Comma-separated list of local services to register (e.g., "example-cluster.example.com:6443,example-app:example-app.default.svc.cluster.local:80")
+	PeerName       string `yaml:"peer_name"`        // Peer name identifier (optional, defaults to POD_NAME or HOSTNAME)
 	// Legacy field (for backward compatibility)
-	PeerAddr          string          `yaml:"peer_addr"`          // Legacy: use remote_peer_addr instead
-	ReconnectInterval int             `yaml:"reconnect_interval"` // Reconnect interval in seconds
-	MaxReconnect      int             `yaml:"max_reconnect"`     // Max reconnect attempts (0 means infinite)
-	HeartbeatInterval int             `yaml:"heartbeat_interval"` // Heartbeat interval in seconds
-	
+	PeerAddr          string `yaml:"peer_addr"`          // Legacy: use remote_peer_addr instead
+	ReconnectInterval int    `yaml:"reconnect_interval"` // Reconnect interval in seconds
+	MaxReconnect      int    `yaml:"max_reconnect"`      // Max reconnect attempts (0 means infinite)
+	HeartbeatInterval int    `yaml:"heartbeat_interval"` // Heartbeat interval in seconds
+
 	// Legacy fields (for backward compatibility)
-	ServerAddr        string          `yaml:"server_addr"`
-	BackendAddr       string          `yaml:"backend_addr"`
-	Backends          []routing.BackendConfig `yaml:"backends"`
-	ClientName        string          `yaml:"client_name"`
+	ServerAddr  string                  `yaml:"server_addr"`
+	BackendAddr string                  `yaml:"backend_addr"`
+	Backends    []routing.BackendConfig `yaml:"backends"`
+	ClientName  string                  `yaml:"client_name"`
 }
 
 // LogConfig log configuration
@@ -100,17 +100,17 @@ func (c *Config) SetDefaults() {
 		c.Peer.TelemetryPath = "/metrics"
 	}
 	if c.Peer.ConnectionTimeout == 0 {
-		c.Peer.ConnectionTimeout = 5
+		c.Peer.ConnectionTimeout = 30 // Increased from 5s to 30s for better reliability
 	}
 	if c.Peer.RegistrationReadTimeout == 0 {
-		c.Peer.RegistrationReadTimeout = 30  // Design doc: 30s timeout to detect peer offline
+		c.Peer.RegistrationReadTimeout = 30 // Design doc: 30s timeout to detect peer offline
 	}
 
 	if c.Peer.ReconnectInterval == 0 {
 		c.Peer.ReconnectInterval = 5
 	}
 	if c.Peer.HeartbeatInterval == 0 {
-		c.Peer.HeartbeatInterval = 3  // Design doc: send heartbeat every 3 seconds
+		c.Peer.HeartbeatInterval = 3 // Design doc: send heartbeat every 3 seconds
 	}
 
 	if c.Log.Level == "" {
@@ -277,4 +277,3 @@ func (c *Config) ApplyEnvOverrides() {
 		}
 	}
 }
-

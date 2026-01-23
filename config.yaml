@@ -6,7 +6,7 @@ peer:
   bind_addr: ":6443"                    # Address to listen for peer connections and proxy requests (format: ip:port or :port, e.g., "127.0.0.1:6443" or ":6443")
   listen_address: ":9090"               # Metrics listener address
   telemetry_path: "/metrics"            # Metrics path
-  connection_timeout: 5                 # Timeout waiting for peer DATA connection after FORWARD (seconds)
+  connection_timeout: 30                # Timeout waiting for peer DATA connection after FORWARD (seconds)
   registration_read_timeout: 180       # Registration connection read timeout (seconds)
   
   # Connection configuration

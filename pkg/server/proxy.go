@@ -166,8 +166,9 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 
 	// Detect protocol type and route
+	// No default client - if no service found, return error
 	getDefaultClient := func() string {
-		return s.getDefaultClientName()
+		return "" // No default client
 	}
 	extractHost := func(data []byte) string {
 		host := proxy.ExtractHostFromHTTP(data)
@@ -192,7 +193,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 
 	// Forward proxy (HTTP CONNECT).
-	// Always supported by default: if CONNECT is detected, proxy to its target.
+	// HTTP CONNECT directly forwards to target address (no service routing needed)
 	if protocol == "http_connect" {
 		host, port, ok := proxy.ExtractConnectHostPort(initial)
 		if !ok {
@@ -204,9 +205,8 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		}
 		targetAddr := net.JoinHostPort(host, port)
 
-		egressName := s.getDefaultClientName()
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] HTTP CONNECT request (remote=%s target=%s default_client=%s)", remote, targetAddr, egressName)
+			logging.Logf("[request][debug] HTTP CONNECT request (remote=%s target=%s)", remote, targetAddr)
 		}
 
 		end := proxy.FindHTTPEndOfHeaders(initial)
@@ -232,16 +232,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 			}
 		}
 
-		if egressName != "" {
-			if c := s.GetClient(egressName); c != nil && c.Connected && c.Conn != nil {
-				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] CONNECT tunnel selected (remote=%s target=%s egress_client=%s)", remote, targetAddr, egressName)
-				}
-				s.forwardOnce(bufConn, conn, egressName, "forward", c, cfg, updateMetrics, targetAddr)
-				return
-			}
-		}
-
+		// HTTP CONNECT directly forwards to target (no service routing)
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] CONNECT direct dial (remote=%s target=%s)", remote, targetAddr)
 		}
@@ -274,31 +265,30 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		}
 	}
 
-	// If clientName is empty (e.g., Host header not found or SNI extraction failed), use default client
+	// If clientName is empty (e.g., Host header not found or SNI extraction failed), return error
 	if clientName == "" {
-		clientName = s.getDefaultClientName()
-		if clientName == "" {
-			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] route selection failed (remote=%s protocol=%s reason=no_host_sni_and_no_default)", remote, protocol)
-			}
-			logging.Logf("[route] select_failed protocol=%s reason=no_host_sni_and_no_default", protocol)
-			// Return error response for HTTP requests
-			if protocol == "http" {
-				errorMsg := "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 40\r\n\r\nBad Request: No Host header or SNI found\n"
-				_, _ = conn.Write([]byte(errorMsg))
-			}
-			return
-		}
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] route selected (remote=%s name=%q protocol=%s reason=default_fallback)", remote, clientName, protocol)
+			logging.Logf("[request][debug] route selection failed (remote=%s protocol=%s reason=no_host_sni)", remote, protocol)
 		}
-		logging.Logf("[route] selected name=%q protocol=%s reason=default_fallback", clientName, protocol)
-	} else {
-		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] route selected (remote=%s name=%q protocol=%s reason=extracted extracted=%q)", remote, clientName, protocol, extractedName)
+		logging.Logf("[route] select_failed protocol=%s reason=no_host_sni", protocol)
+		// Return error response for HTTP requests
+		if protocol == "http" {
+			errorMsg := "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 40\r\n\r\nBad Request: No Host header or SNI found\n"
+			_, _ = conn.Write([]byte(errorMsg))
+		} else if protocol == "https" {
+			// For HTTPS, close connection (can't send HTTP error)
+			_ = conn.Close()
+		} else {
+			// For raw TCP, close connection
+			_ = conn.Close()
 		}
-		logging.Logf("[route] selected name=%q protocol=%s reason=extracted", clientName, protocol)
+		return
 	}
+
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] route selected (remote=%s name=%q protocol=%s reason=extracted extracted=%q)", remote, clientName, protocol, extractedName)
+	}
+	logging.Logf("[route] selected name=%q protocol=%s reason=extracted", clientName, protocol)
 
 	// Debug: show selected service candidates for this name.
 	// Always show this to help diagnose routing issues
@@ -359,18 +349,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "no_client")
 		}
-		// Try default client as fallback
-		defaultClientName := s.getDefaultClientName()
-		if defaultClientName != "" && defaultClientName != clientName {
-			client = s.GetClient(defaultClientName)
-			if client != nil {
-				logging.Logf("[tunnel] Using default client %s as fallback", defaultClientName)
-				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] using default client fallback (remote=%s original=%s fallback=%s)", remote, clientName, defaultClientName)
-				}
-				clientName = defaultClientName
-			}
-		}
+		// No fallback - if service not found, return error
 		if client == nil {
 			logging.Logf("[tunnel] No client available for proxy")
 			if cfg != nil && cfg.Log.Level == "debug" {
@@ -488,7 +467,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		return
 	}
 
-	logging.Logf("[tunnel] remote service ready name=%s peer_id=%s remote_peer_addr=%s conn=%v connected=%t backend=%s", 
+	logging.Logf("[tunnel] remote service ready name=%s peer_id=%s remote_peer_addr=%s conn=%v connected=%t backend=%s",
 		clientName, client.PeerID, client.IP, client.Conn != nil, client.Connected, client.BackendAddr)
 
 	// Log selected backend details after route selection.
@@ -498,7 +477,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 			backend = net.JoinHostPort(client.IP, "80")
 		}
 		logging.Logf("[request][debug] selected backend (remote=%s name=%s protocol=%s backend=%s)", remote, clientName, protocol, backend)
-		logging.Logf("[request][debug] starting tunnel forward (remote=%s name=%s protocol=%s backend=%s peer_id=%s remote_peer_addr=%s)", 
+		logging.Logf("[request][debug] starting tunnel forward (remote=%s name=%s protocol=%s backend=%s peer_id=%s remote_peer_addr=%s)",
 			remote, clientName, protocol, client.BackendAddr, client.PeerID, client.IP)
 	}
 
@@ -524,7 +503,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	// 4. Bridge data streams
 	logging.Logf("[route] FORWARDING to next proxy - name=%s peer_id=%s remote_peer_addr=%s backend=%s protocol=%s client=%s",
 		clientName, client.PeerID, client.IP, client.BackendAddr, protocol, remote)
-	logging.Logf("[tunnel] forwarding via tunnel name=%s backend=%s peer_id=%s remote_peer_addr=%s protocol=%s", 
+	logging.Logf("[tunnel] forwarding via tunnel name=%s backend=%s peer_id=%s remote_peer_addr=%s protocol=%s",
 		clientName, client.BackendAddr, client.PeerID, client.IP, protocol)
 	s.forwardOnce(bufConn, conn, clientName, protocol, client, cfg, updateMetrics, "")
 }
@@ -749,7 +728,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	// Format FORWARD command according to design doc
 	// Format: FORWARD:proxy_id:name:backend_addr\n
 	cmd := wire.FormatForward(proxyID, name, backendAddr)
-	logging.Logf("[tunnel] SENDING FORWARD proxy_id=%s name=%s backend=%s peer_id=%s remote_peer_addr=%s client=%s", 
+	logging.Logf("[tunnel] SENDING FORWARD proxy_id=%s name=%s backend=%s peer_id=%s remote_peer_addr=%s client=%s",
 		proxyID, name, backendAddr, client.PeerID, client.IP, remote)
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[request][debug] FORWARD command (proxy_id=%s cmd=%q peer_remote=%s)", proxyID, strings.TrimSpace(cmd), remoteAddr)

@@ -317,9 +317,20 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 
 						if sourcePeerAddr == "" {
 							logging.Logf("[server] ERROR: cannot determine peer_addr for FORWARD request (conn_remote_ip=%s, peer may not have sent SYNC with PeerAddr yet)", connRemoteIP)
+							// Don't proceed if we can't find peer address - DATA connection will fail anyway
+							logging.Logf("[server] skipping FORWARD request proxy_id=%s name=%s (no peer_addr available)", proxyID, name)
+							if s.collector != nil {
+								s.collector.RecordProxyError(name, "data_dial_error")
+							}
+							continue // Skip this FORWARD request
 						}
 					} else {
 						logging.Logf("[server] ERROR: cannot determine peer_addr for FORWARD request (conn is nil or has no RemoteAddr)")
+						logging.Logf("[server] skipping FORWARD request proxy_id=%s name=%s (no peer_addr available)", proxyID, name)
+						if s.collector != nil {
+							s.collector.RecordProxyError(name, "data_dial_error")
+						}
+						continue // Skip this FORWARD request
 					}
 				} else {
 					logging.Logf("[server] found peer_addr=%s from registered services (conn_remote_ip=%s)", sourcePeerAddr, connRemoteIP)
@@ -336,8 +347,19 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				if cfg != nil && cfg.Log.Level == "debug" {
 					logging.Logf("[request][debug] FORWARD command received (from_addr=%s proxy_id=%s name=%s backend=%s service_type=%s)", sourcePeerAddr, proxyID, name, backendAddr, serviceType)
 				}
+
+				// Validate sourcePeerAddr before calling handleForwardRequest
+				if sourcePeerAddr == "" {
+					logging.Logf("[server] ERROR: sourcePeerAddr is empty, cannot handle FORWARD request proxy_id=%s name=%s", proxyID, name)
+					if s.collector != nil {
+						s.collector.RecordProxyError(name, "data_dial_error")
+					}
+					continue // Skip this FORWARD request
+				}
+
 				// Handle FORWARD request: connect to backend and establish DATA connection
 				// Run in goroutine to avoid blocking the control connection
+				logging.Logf("[server] starting handleForwardRequest goroutine proxy_id=%s name=%s peer_addr=%s", proxyID, name, sourcePeerAddr)
 				go s.handleForwardRequest(sourcePeerAddr, proxyID, name, backendAddr, cfg)
 			} else {
 				logging.Logf("[server] invalid FORWARD message (remote=%s message=%q)", clientIP, line)

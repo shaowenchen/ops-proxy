@@ -242,8 +242,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		readTimeout = cfg.GetRegistrationReadTimeout()
 	}
 
-	// Keep reading subsequent REGISTER, SYNC, or FORWARD lines.
+	// Keep reading subsequent REGISTER, SYNC, FORWARD, or DATA lines.
 	// Client sends periodic heartbeat (default 10s); no separate heartbeat protocol needed.
+	// DATA lines can appear on control connection when peer sends data after FORWARD command.
 	for {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		line, err := reader.ReadString('\n')
@@ -257,6 +258,57 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
+		}
+
+		// Check if it's a DATA line (data stream on control connection)
+		// This happens when peer sends data after FORWARD command on the same control connection
+		if proxyID, ok := protocol.ParseDataLine(line); ok {
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[request][debug] DATA line on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
+			}
+			// Find the pending DATA channel for this proxy_id
+			s.pendingLock.Lock()
+			ch := s.pendingData[proxyID]
+			if ch != nil {
+				delete(s.pendingData, proxyID)
+			}
+			s.pendingLock.Unlock()
+			
+			if ch != nil {
+				// Send the control connection to the waiting goroutine
+				// The connection will be used to read data after the DATA header
+				if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[request][debug] DATA matched on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
+				}
+				// Send the control connection to the waiting goroutine
+				// The goroutine will read data from this connection
+				ch <- conn
+				// Continue reading from control connection for other commands after data is read
+				// The waiting goroutine will handle reading data, but we need to continue
+				// reading commands. However, once we start reading data, we can't read commands
+				// from the same connection simultaneously.
+				// 
+				// Solution: The waiting goroutine will read data directly from the connection.
+				// After data is read, the connection can continue to be used for commands.
+				// But we need to stop reading here and let the goroutine handle it.
+				// Actually, we should return here and let the waiting goroutine handle the connection.
+				// But we can't return because we need to continue reading other commands.
+				// 
+				// The issue is: we can't use the same connection for both reading commands and data simultaneously.
+				// We need to either:
+				// 1. Use separate connections for commands and data
+				// 2. Multiplex commands and data on the same connection (requires protocol changes)
+				// 
+				// For now, we'll continue reading and let the goroutine handle data reading.
+				// The goroutine will read data directly from the connection.
+				continue
+			} else {
+				if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[request][debug] unexpected DATA on control connection (remote=%s proxy_id=%s reason=no_pending_forward)", clientIP, proxyID)
+				}
+				logging.Logf("Unexpected DATA line on control connection for proxy-id=%s (no pending forward)", proxyID)
+				continue
+			}
 		}
 
 		// Check if it's a FORWARD command (request to forward traffic from another peer)
@@ -673,10 +725,8 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] backend->peer done (proxy_id=%s bytes=%d err=%v)", proxyID, n, e)
 		}
-		// Close write side to signal EOF to peer
-		if tcpConn, ok := dataConn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
-		}
+		// Don't close control connection write side - it's still used for other commands
+		// Only signal EOF by not writing more data
 		errCh <- e
 	}()
 

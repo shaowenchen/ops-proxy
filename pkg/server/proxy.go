@@ -835,14 +835,16 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		logging.Logf("[request][debug] FORWARD command sent (proxy_id=%s client=%s name=%s backend=%s)", proxyID, remote, name, backendAddr)
 	}
 
-	// Wait for client to connect back with DATA:<proxy-id> on registration port.
+	// Wait for DATA on control connection (not a new connection)
+	// The receiving peer will send DATA:<proxy-id> on the control connection,
+	// which will be detected by the control connection reader and passed to us via channel
 	var dataConn net.Conn
 	dataTimeout := 30 * time.Second  // Default timeout (increased from 5s to 30s)
 	if cfg != nil {
 		dataTimeout = cfg.GetConnectionTimeout()
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] waiting for DATA connection (proxy_id=%s name=%s timeout=%s)", proxyID, name, dataTimeout)
+		logging.Logf("[request][debug] waiting for DATA on control connection (proxy_id=%s name=%s timeout=%s)", proxyID, name, dataTimeout)
 	}
 	select {
 	case dataConn = <-ch:
@@ -850,16 +852,16 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		if dataConn != nil && dataConn.RemoteAddr() != nil {
 			peer = dataConn.RemoteAddr().String()
 		}
-		logging.Logf("[tunnel] DATA connection established name=%s proxy_id=%s data_peer=%s", name, proxyID, peer)
+		logging.Logf("[tunnel] DATA received on control connection name=%s proxy_id=%s data_peer=%s", name, proxyID, peer)
 		if s.collector != nil {
 			s.collector.RecordDataMatched(name)
 		}
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA connection established (remote=%s name=%s proxy_id=%s data_peer=%s)", remote, name, proxyID, peer)
+			logging.Logf("[request][debug] DATA received on control connection (remote=%s name=%s proxy_id=%s data_peer=%s)", remote, name, proxyID, peer)
 			logging.Logf("[request][debug] bridge start (remote=%s name=%s protocol=%s proxy_id=%s)", remote, name, protocol, proxyID)
 		}
 	case <-time.After(dataTimeout):
-		logging.Logf("[tunnel] DATA timeout proxy_id=%s name=%s peer_id=%s timeout=%s", proxyID, name, client.PeerID, dataTimeout)
+		logging.Logf("[tunnel] DATA timeout on control connection proxy_id=%s name=%s peer_id=%s timeout=%s", proxyID, name, client.PeerID, dataTimeout)
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] DATA connection timeout (proxy_id=%s client=%s name=%s timeout=%s)", proxyID, remote, name, dataTimeout)
 		}
@@ -872,7 +874,8 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		}
 		return
 	}
-	defer dataConn.Close()
+	// Don't close the control connection - it's still used for other commands
+	// defer dataConn.Close() // REMOVED - don't close control connection
 
 	logging.Logf("[tunnel] bridge start name=%s proxy_id=%s", name, proxyID)
 	if cfg != nil && cfg.Log.Level == "debug" {
@@ -888,10 +891,8 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] client->peer done (proxy_id=%s bytes=%d err=%v)", proxyID, n, err)
 		}
-		// Close write side to signal EOF to peer
-		if tcpConn, ok := dataConn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
-		}
+		// Don't close control connection write side - it's still used for other commands
+		// Only signal EOF by not writing more data
 		errCh <- err
 	}()
 	go func() {

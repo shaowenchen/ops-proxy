@@ -441,9 +441,16 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	}
 	// Update peer connection information (PeerID, PeerAddr, Conn)
 	// This allows us to find peer's bind address when receiving FORWARD requests
+	// If connection changed, update it (old connection should be closed by peer)
+	if peerSvc.Conn != peerConn {
+		if peerSvc.Conn != nil && peerConn != nil {
+			logging.Logf("[registry] peer connection changed (peer_id=%s remote_peer_addr=%s old_conn=%v new_conn=%v)",
+				syncPeerID, peerIP, peerSvc.Conn != nil, peerConn != nil)
+		}
+		peerSvc.Conn = peerConn
+	}
 	peerSvc.PeerID = syncPeerID
 	peerSvc.PeerAddr = syncPeerAddr
-	peerSvc.Conn = peerConn // Store the control connection for this peer
 
 	// Also store by connection's RemoteAddr IP if different from peerIP
 	// This handles cases where peer connects through a load balancer

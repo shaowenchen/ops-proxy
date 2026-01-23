@@ -76,22 +76,38 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 	
 	// Remove all existing services with the same name to ensure name uniqueness
 	// This ensures that if multiple peers register the same service name, only the latest one is kept
+	// IMPORTANT: Only remove if the connection is the same or if it's a different peer
+	// If it's the same connection, we should update in place rather than remove and re-add
 	// First, collect all keys to delete (to avoid modifying map during iteration)
 	keysToDelete := make([]string, 0)
 	if existingClient, exists := s.clients[name]; exists {
-		// Remove from services map using the old identifier (prefer PeerID over IP)
-		oldIdentifier := existingClient.PeerID
-		if oldIdentifier == "" {
-			oldIdentifier = existingClient.IP
+		// Check if this is the same connection being reused
+		// If so, we should update in place rather than remove
+		if existingClient.Conn == conn && conn != nil {
+			// Same connection, just update the info - don't remove from services map
+			// This preserves the connection for findPeerAddrByConn
+			logging.Logf("[registry] updating existing service with same name and connection name=%q old_ip=%s old_peer_id=%q new_peer_id=%q", 
+				name, existingClient.IP, existingClient.PeerID, peerID)
+		} else {
+			// Different connection or conn is nil, safe to remove old entry
+			oldIdentifier := existingClient.PeerID
+			if oldIdentifier == "" {
+				oldIdentifier = existingClient.IP
+			}
+			oldKey := serviceKey(name, oldIdentifier)
+			keysToDelete = append(keysToDelete, oldKey)
+			logging.Logf("[registry] removing old service with same name name=%q old_ip=%s old_peer_id=%q (different connection)", 
+				name, existingClient.IP, existingClient.PeerID)
 		}
-		oldKey := serviceKey(name, oldIdentifier)
-		keysToDelete = append(keysToDelete, oldKey)
-		logging.Logf("[registry] removing old service with same name name=%q old_ip=%s old_peer_id=%q", 
-			name, existingClient.IP, existingClient.PeerID)
 	}
 	// Also collect any other entries in services map with the same name (from other IPs/peerIDs)
+	// But skip if they use the same connection (to avoid breaking active forwarding)
 	for key, svc := range s.services {
 		if svc != nil && svc.Name == name {
+			// Skip if this is the same connection (will be updated in place)
+			if svc.Conn == conn && conn != nil {
+				continue
+			}
 			// Avoid duplicate keys
 			found := false
 			for _, k := range keysToDelete {

@@ -621,61 +621,26 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		logging.Logf("[request][debug] backend connected (proxy_id=%s name=%s backend=%s local=%s duration=%s)", proxyID, name, backendAddr, backendConn.LocalAddr(), backendDialDuration)
 	}
 
-	// Step 2: Establish DATA connection back to requesting peer
-	// Use the control connection's remote address to establish DATA connection
-	// The peer should be listening on the same address for DATA connections
-	logging.Logf("[server] checking control connection proxy_id=%s control_conn=%v", proxyID, controlConn != nil)
+	// Step 2: Use the existing control connection to send data
+	// No need to establish a new DATA connection - reuse the control connection
+	logging.Logf("[server] using control connection for DATA proxy_id=%s control_conn=%v", proxyID, controlConn != nil)
 	if controlConn == nil {
-		logging.Logf("[server] ERROR: control connection is nil, cannot establish DATA connection proxy_id=%s", proxyID)
+		logging.Logf("[server] ERROR: control connection is nil, cannot send data proxy_id=%s", proxyID)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}
 		return
 	}
-	if controlConn.RemoteAddr() == nil {
-		logging.Logf("[server] ERROR: control connection has no RemoteAddr, cannot establish DATA connection proxy_id=%s", proxyID)
-		if s.collector != nil {
-			s.collector.RecordProxyError(name, "data_dial_error")
-		}
-		return
-	}
-
-	// Use control connection's remote address for DATA connection
-	// This assumes the peer listens for DATA connections on the same address as control connection
-	dataTargetAddr := controlConn.RemoteAddr().String()
-	logging.Logf("[server] connecting DATA channel proxy_id=%s target_addr=%s timeout=%s (using control connection's remote address)", proxyID, dataTargetAddr, dialTimeout)
-	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] dialing DATA channel (proxy_id=%s name=%s target_addr=%s timeout=%s)", proxyID, name, dataTargetAddr, dialTimeout)
-	}
-
-	// Attempt to dial DATA connection using control connection's remote address
-	startDial := time.Now()
-	dataConn, err := net.DialTimeout("tcp", dataTargetAddr, dialTimeout)
-	dialDuration := time.Since(startDial)
-	if err != nil {
-		logging.Logf("[server] DATA dial failed proxy_id=%s target_addr=%s err=%v duration=%s", proxyID, dataTargetAddr, err, dialDuration)
-		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA dial failed (proxy_id=%s name=%s target_addr=%s err=%v duration=%s)", proxyID, name, dataTargetAddr, err, dialDuration)
-		}
-		if s.collector != nil {
-			s.collector.RecordProxyError(name, "data_dial_error")
-		}
-		return
-	}
-	logging.Logf("[server] DATA dial succeeded proxy_id=%s target_addr=%s duration=%s", proxyID, dataTargetAddr, dialDuration)
-	defer dataConn.Close()
-	logging.Logf("[server] DATA channel connected proxy_id=%s target_addr=%s local=%s remote=%s", proxyID, dataTargetAddr, dataConn.LocalAddr(), dataConn.RemoteAddr())
-	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] DATA dial succeeded (proxy_id=%s name=%s target_addr=%s local=%s remote=%s duration=%s)", proxyID, name, dataTargetAddr, dataConn.LocalAddr(), dataConn.RemoteAddr(), dialDuration)
-	}
-
-	// Step 3: Send DATA header to identify this connection
+	
+	// Send DATA header to identify this data stream on the control connection
 	dataHeader := protocol.FormatData(proxyID)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] sending DATA header (proxy_id=%s name=%s header=%q)", proxyID, name, strings.TrimSpace(dataHeader))
+		logging.Logf("[request][debug] sending DATA header on control connection (proxy_id=%s name=%s header=%q)", proxyID, name, strings.TrimSpace(dataHeader))
 	}
-	if _, err := dataConn.Write([]byte(dataHeader)); err != nil {
-		logging.Logf("[server] DATA header send failed proxy_id=%s err=%v", proxyID, err)
+	
+	// Send DATA header on control connection to mark the start of data transmission
+	if _, err := controlConn.Write([]byte(dataHeader)); err != nil {
+		logging.Logf("[server] DATA header send failed on control connection proxy_id=%s err=%v", proxyID, err)
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] DATA header send failed (proxy_id=%s name=%s err=%v)", proxyID, name, err)
 		}
@@ -684,11 +649,14 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		}
 		return
 	}
-	logging.Logf("[server] DATA channel established proxy_id=%s", proxyID)
+	logging.Logf("[server] DATA header sent on control connection proxy_id=%s", proxyID)
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[request][debug] DATA header sent (proxy_id=%s name=%s)", proxyID, name)
-		logging.Logf("[request][debug] DATA channel established (proxy_id=%s name=%s local=%s remote=%s)", proxyID, name, dataConn.LocalAddr(), dataConn.RemoteAddr())
+		logging.Logf("[request][debug] using control connection for data transmission (proxy_id=%s name=%s)", proxyID, name)
 	}
+	
+	// Use control connection as data connection
+	dataConn := controlConn
 
 	logging.Logf("[server] bridge start proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
 	if cfg != nil && cfg.Log.Level == "debug" {

@@ -82,7 +82,8 @@ func runPeer(ctx context.Context) error {
 		}
 	}()
 
-	// Always register local services (even if SERVICE_ADDR is empty, register a default local service)
+	// Register local services if SERVICE_ADDR is configured
+	// Design requirement: if SERVICE_ADDR is empty, don't register any service (no default value)
 	go func() {
 		peerName := appConfig.Peer.PeerName
 		if peerName == "" {
@@ -100,14 +101,16 @@ func runPeer(ctx context.Context) error {
 			serviceAddr = appConfig.Peer.BackendAddr
 		}
 		
-		// Always register at least one local service (default if SERVICE_ADDR is empty)
+		// Only register services if SERVICE_ADDR is configured
 		if serviceAddr == "" {
-			// Register a default local service with peer name
-			proxyServer.RegisterClientByName(peerName, "local", "127.0.0.1:80", nil)
-			logging.Logf("Registered default local service: name=%q source=local", peerName)
+			logging.Logf("No SERVICE_ADDR configured, skipping local service registration")
 		} else {
 			registered := proxyServer.RegisterLocalServices(serviceAddr, peerName)
-			logging.Logf("Registered %d local service(s) from SERVICE_ADDR", registered)
+			if registered > 0 {
+				logging.Logf("Registered %d local service(s) from SERVICE_ADDR", registered)
+			} else {
+				logging.Logf("No valid services in SERVICE_ADDR: %q", serviceAddr)
+			}
 		}
 		
 		// Print full service map after local services are registered

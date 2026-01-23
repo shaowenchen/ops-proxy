@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -453,10 +454,19 @@ func (s *ProxyServer) RegisterLocalServices(serviceAddr string, defaultName stri
 	registered := 0
 	for i, b := range parsed {
 		logging.Logf("[registry] processing service %d/%d: name=%q address=%q", i+1, len(parsed), b.Name, b.Address)
+		
+		// Validate service name and address
 		if strings.TrimSpace(b.Name) == "" || strings.TrimSpace(b.Address) == "" {
 			logging.Logf("[registry] skipping invalid service: name=%q address=%q", b.Name, b.Address)
 			continue
 		}
+		
+		// Check if name looks like a port number (invalid service name)
+		if _, err := strconv.Atoi(b.Name); err == nil {
+			logging.Logf("[registry] skipping service with numeric name (likely misconfigured): name=%q address=%q", b.Name, b.Address)
+			continue
+		}
+		
 		logging.Logf("[registry] registering local service: name=%q backend=%q", b.Name, b.Address)
 		s.RegisterClientByName(b.Name, "local", b.Address, nil)
 		registered++

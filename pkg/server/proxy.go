@@ -662,8 +662,17 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	} else if client != nil {
 		backendAddr = client.BackendAddr
 	}
+	// Design requirement: no default value for backend address
+	// If backend is empty, this is a configuration error
 	if backendAddr == "" {
-		backendAddr = net.JoinHostPort(client.IP, "80")
+		logging.Logf("[tunnel] ERROR: backend address is empty for service name=%s peer_id=%s", name, client.PeerID)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "empty_backend")
+		}
+		if update != nil {
+			update(name, protocol, false, 0, 0, time.Since(start))
+		}
+		return
 	}
 
 	// Allocate an 8-digit random proxy-id for this request to avoid collisions.

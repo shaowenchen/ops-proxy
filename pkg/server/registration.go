@@ -152,11 +152,13 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			if clientName == "" {
 				continue
 			}
+			// Design requirement: if backend is empty, don't register (no default value)
 			if backendAddr == "" {
-				backendAddr = net.JoinHostPort(clientIP, "80")
-			} else {
-				backendAddr = routing.NormalizeBackendAddr(backendAddr, "localhost")
+				logging.Logf("[registry] skipping service with empty backend (remote=%s name=%q)", clientIP, clientName)
+				continue
 			}
+			// Normalize backend address
+			backendAddr = routing.NormalizeBackendAddr(backendAddr, "localhost")
 			if cfg != nil && cfg.Log.Level == "debug" {
 				logging.Logf("[request][debug] registering service (remote=%s name=%q backend=%q peer_id=%q peer_addr=%q)", clientIP, clientName, backendAddr, peerID, peerAddr)
 			}

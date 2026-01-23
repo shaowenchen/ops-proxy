@@ -71,8 +71,8 @@ func FormatRegister(regs []Registration) string {
 // Format: REGISTER:peer_id:peer_addr:name1:backend1,name2:backend2,...
 // peer_addr is the peer's bind address (e.g., "10.0.1.2:6443") for DATA connections
 func FormatRegisterWithPeerID(peerID, peerAddr string, regs []Registration) string {
-	if peerID == "" {
-		return FormatRegister(regs)
+	if peerID == "" || peerAddr == "" {
+		return FormatRegister(regs)  // Fallback to old format if missing fields
 	}
 	parts := make([]string, 0, len(regs))
 	for _, r := range regs {
@@ -110,13 +110,29 @@ func ParseRegisterLine(line string) (regs []Registration, ok bool) {
 	colonCount := strings.Count(checkPart, ":")
 	if colonCount >= 3 {
 		// New format: REGISTER:peer_id:peer_addr:name:backend,...
-		parts := strings.SplitN(rest, ":", 3)
-		if len(parts) >= 3 {
+		// peer_addr should be in host:port format, so we need at least 4 colons:
+		// peer_id : peer_host : peer_port : name : backend_host : backend_port
+		// Split into: peer_id, peer_addr (including port), rest
+		// We need to be smarter about splitting peer_addr
+		
+		// Try to find peer_id and peer_addr first (they should be first two fields)
+		// peer_id doesn't contain ':', peer_addr should be 'host:port'
+		parts := strings.SplitN(rest, ":", 4)
+		if len(parts) >= 4 {
 			peerID = strings.TrimSpace(parts[0])
-			peerAddr = strings.TrimSpace(parts[1])
-			servicesPart = parts[2]
+			// peer_addr is parts[1]:parts[2] (host:port)
+			peerAddr = strings.TrimSpace(parts[1]) + ":" + strings.TrimSpace(parts[2])
+			servicesPart = parts[3]
 		} else {
-			servicesPart = rest
+			// Fallback: old splitting logic
+			parts = strings.SplitN(rest, ":", 3)
+			if len(parts) >= 3 {
+				peerID = strings.TrimSpace(parts[0])
+				peerAddr = strings.TrimSpace(parts[1])
+				servicesPart = parts[2]
+			} else {
+				servicesPart = rest
+			}
 		}
 	} else if colonCount >= 2 {
 		// Medium format: REGISTER:peer_id:name:backend,...
@@ -210,13 +226,23 @@ func ParseSyncLine(line string) (regs []Registration, ok bool) {
 	colonCount := strings.Count(checkPart, ":")
 	if colonCount >= 3 {
 		// New format: SYNC:peer_id:peer_addr:name:backend,...
-		parts := strings.SplitN(rest, ":", 3)
-		if len(parts) >= 3 {
+		// peer_addr is in host:port format, so split carefully
+		parts := strings.SplitN(rest, ":", 4)
+		if len(parts) >= 4 {
 			peerID = strings.TrimSpace(parts[0])
-			peerAddr = strings.TrimSpace(parts[1])
-			servicesPart = parts[2]
+			// peer_addr is parts[1]:parts[2] (host:port)
+			peerAddr = strings.TrimSpace(parts[1]) + ":" + strings.TrimSpace(parts[2])
+			servicesPart = parts[3]
 		} else {
-			servicesPart = rest
+			// Fallback: old splitting logic
+			parts = strings.SplitN(rest, ":", 3)
+			if len(parts) >= 3 {
+				peerID = strings.TrimSpace(parts[0])
+				peerAddr = strings.TrimSpace(parts[1])
+				servicesPart = parts[2]
+			} else {
+				servicesPart = rest
+			}
 		}
 	} else if colonCount >= 2 {
 		// Medium format: SYNC:peer_id:name:backend,...

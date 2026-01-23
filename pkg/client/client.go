@@ -586,21 +586,31 @@ func getPeerBindAddr(cfg *config.Config) string {
 	_, port, err := net.SplitHostPort(bindAddr)
 	if err != nil {
 		port = "6443"
+		logging.Logf("[client] getPeerBindAddr: failed to parse bind_addr=%q, using default port 6443", bindAddr)
+	} else {
+		logging.Logf("[client] getPeerBindAddr: extracted port=%s from bind_addr=%s", port, bindAddr)
 	}
 	
 	// Priority 1: LOCAL_PEER_ADDR (explicitly configured local address)
 	// This allows each peer to specify its address for other peers to connect
 	// Can be LoadBalancer, Service name, or direct IP
 	if cfg != nil && cfg.Peer.LocalPeerAddr != "" {
-		logging.Logf("[client] using LOCAL_PEER_ADDR as peer_addr: %s", cfg.Peer.LocalPeerAddr)
-		return cfg.Peer.LocalPeerAddr
+		localAddr := cfg.Peer.LocalPeerAddr
+		// Ensure LOCAL_PEER_ADDR has port, add if missing
+		if !strings.Contains(localAddr, ":") {
+			localAddr = net.JoinHostPort(localAddr, port)
+			logging.Logf("[client] LOCAL_PEER_ADDR missing port, added: %s", localAddr)
+		}
+		logging.Logf("[client] using LOCAL_PEER_ADDR as peer_addr: %s", localAddr)
+		return localAddr
 	}
 	
 	// Priority 2: POD_IP:port (Kubernetes environment)
 	podIP := os.Getenv("POD_IP")
+	logging.Logf("[client] getPeerBindAddr: POD_IP=%q port=%q", podIP, port)
 	if podIP != "" {
 		addr := net.JoinHostPort(podIP, port)
-		logging.Logf("[client] using POD_IP as peer_addr: %s", addr)
+		logging.Logf("[client] using POD_IP as peer_addr: %s (POD_IP=%s port=%s)", addr, podIP, port)
 		return addr
 	}
 	

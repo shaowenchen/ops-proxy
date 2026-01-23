@@ -580,8 +580,14 @@ func (s *ProxyServer) getPeerBindAddr(cfg *config.Config) string {
 	// Design doc: "每个 Peer 都可能有一个配置，用于提供给其他 Peer 连接到自己"
 	// Can be LoadBalancer, Service name, or direct IP
 	if cfg != nil && cfg.Peer.LocalPeerAddr != "" {
-		logging.Logf("[server] using LOCAL_PEER_ADDR as peer_addr: %s", cfg.Peer.LocalPeerAddr)
-		return cfg.Peer.LocalPeerAddr
+		localAddr := cfg.Peer.LocalPeerAddr
+		// Ensure LOCAL_PEER_ADDR has port, add if missing
+		if !strings.Contains(localAddr, ":") {
+			localAddr = net.JoinHostPort(localAddr, port)
+			logging.Logf("[server] LOCAL_PEER_ADDR missing port, added: %s", localAddr)
+		}
+		logging.Logf("[server] using LOCAL_PEER_ADDR as peer_addr: %s", localAddr)
+		return localAddr
 	}
 	
 	// Priority 2: POD_IP:port (Kubernetes)

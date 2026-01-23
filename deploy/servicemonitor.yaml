@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ops-proxy
+  namespace: monitoring
+  labels:
+    app: ops-proxy
+    component: ops-proxy
+spec:
+  selector:
+    matchLabels:
+      app: ops-proxy
+      component: ops-proxy
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+  namespaceSelector:
+    matchNames:
+    - ops-system
+

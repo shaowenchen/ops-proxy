@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Vendor directory should use LF line endings
+vendor/** text eol=lf
+

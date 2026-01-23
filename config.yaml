@@ -1,0 +1,41 @@
+# Ops Proxy Default Configuration File
+
+# Peer configuration (each peer can listen and connect to other peers)
+peer:
+  # Listening configuration
+  bind_addr: ":6443"                    # Address to listen for peer connections and proxy requests (format: ip:port or :port, e.g., "127.0.0.1:6443" or ":6443")
+  listen_address: ":9090"               # Metrics listener address
+  telemetry_path: "/metrics"            # Metrics path
+  connection_timeout: 5                 # Timeout waiting for peer DATA connection after FORWARD (seconds)
+  registration_read_timeout: 180       # Registration connection read timeout (seconds)
+  
+  # Connection configuration
+  remote_peer_addr: ""                  # Comma-separated list of remote peer addresses to connect to (e.g., "peer1:6443,peer2:6443")
+  service_addr: ""                      # Comma-separated list of local services to register (e.g., "example-cluster.example.com:6443,example-app:example-app.default.svc.cluster.local:80")
+  peer_name: ""                         # Peer name identifier (optional, defaults to POD_NAME or HOSTNAME)
+  reconnect_interval: 5                 # Reconnect interval (seconds)
+  max_reconnect: 0                      # Max reconnect attempts (0 means infinite)
+  heartbeat_interval: 30                # Heartbeat interval (seconds) - peer re-registers periodically to keep connection alive
+  
+  # Legacy fields (for backward compatibility)
+  # server_addr: "ops-proxy-peer.example.svc.cluster.local:6443"
+  # backend_addr: "example-cluster.example.com:6443,example-app:example-app.default.svc.cluster.local:80"
+  # client_name: "peer-1"
+  # backends:
+  #   - name: "example-cluster.example.com"
+  #     address: "example-cluster.example.com:6443"
+
+# Log configuration
+log:
+  # Log level: debug, info, warn, error
+  level: "info"
+  # Log format: text, json
+  format: "text"
+
+# Proxy configuration
+proxy:
+  # Dial timeout (seconds)
+  dial_timeout: 30
+  # Read timeout (seconds)
+  read_timeout: 30
+

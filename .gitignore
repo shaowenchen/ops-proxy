@@ -1,0 +1,33 @@
+# Binaries
+ops-proxy
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+# Note: vendor/ is intentionally included in the repository
+
+# Configuration files (config.yaml is included as default)
+# Local overrides can use config.local.yaml
+config.local.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+

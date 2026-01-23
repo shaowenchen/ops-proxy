@@ -1,0 +1,71 @@
+# Peer 通信机制详解
+
+两个 peer 之间的通信分为以下几个阶段：
+
+## 1. 连接建立阶段
+
+Peer A 通过 IP 192.0.2.1:6443 对外暴露。
+
+*Peer A*
+
+- 注册有 test-cluster-a.example.com:80 服务
+
+*Peer B*
+
+- 注册有 test-cluster-b.example.com:80 服务
+- 通过 remote_peer_addr=192.0.2.1:6443 连接到 Peer A
+
+*Peer C*
+
+- 注册有 test-cluster-c.example.com:80 服务
+- 通过 remote_peer_addr=192.0.2.1:6443 连接到 Peer A
+
+*Peer B 和 Peer C 连接到 Peer A*
+
+- 保持持续连接，不需要频繁建立连接和断开连接
+- 转发流量时，生成 8 位随机 proxy_id 进行唯一标识，避免数据混乱
+- 保持心跳连接
+
+## 2. 服务注册阶段
+
+- Peer B 和 Peer C 会定期发送 REGISTER 命令到 Peer A，用于更新整个 peer 集群的服务列表
+- Peer A 会推送整个 peer 集群的服务列表到 Peer B 和 Peer C
+
+**Peer → Peer 同步 Services 列表流程**：
+
+1. Peer A 收到 SYNC 命令
+2. 更新 peerServices map（存储 Peer B 的完整服务列表）
+3. 同时注册到 services map（用于路由查找）
+4. 打印完整的 peerServices map 结构
+
+## 3. 数据转发阶段
+
+- Peer A 收到 test-cluster-a.example.com:80 的请求
+
+```
+1. Peer A 收到 test-cluster-a.example.com:80 的请求
+2. 根据 Host/SNI 提取域名，在 services map 中查找服务，发现是本地的 local Peer A 的服务，直接转发到本地 backend
+```
+
+- Peer B 收到 test-cluster-a.example.com:80 的请求
+
+```
+1. Peer B 收到 test-cluster-b.example.com:80 的请求
+2. 根据 Host/SNI 提取域名，在 services map 中查找服务，发现是其他 Peer A 的服务
+3. 生成唯一的 proxy_id，向 Peer A 发送 FORWARD 命令：
+   FORWARD:proxy_id:test-cluster-a.example.com:80\n
+4. Peer A 收到 FORWARD 命令后，转发请求到 backend test-cluster-a.example.com:80
+5. Peer A 收到 backend test-cluster-a.example.com:80 的响应后，转发响应到 Peer B
+6. Peer B 收到 backend test-cluster-a.example.com:80 的响应后，转发响应到客户端
+```
+
+- Peer A 收到 test-cluster-c.example.com:80 的请求
+```
+1. Peer A 收到 test-cluster-c.example.com:80 的请求
+2. 根据 Host/SNI 提取域名，在 services map 中查找服务，发现是其他 Peer C 的服务
+3. 生成唯一的 proxy_id，向 Peer C 发送 FORWARD 命令：
+   FORWARD:proxy_id:test-cluster-c.example.com:80\n
+4. Peer C 收到 FORWARD 命令后，转发请求到 backend test-cluster-c.example.com:80
+5. Peer C 收到 backend test-cluster-c.example.com:80 的响应后，转发响应到 Peer A
+6. Peer A 收到 backend test-cluster-c.example.com:80 的响应后，转发响应到客户端
+```

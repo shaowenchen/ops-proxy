@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ops-proxy
+  namespace: monitoring
+  labels:
+    ops: "true"
+spec:
+  selector:
+    matchLabels:
+      component: ops-proxy
+  podMetricsEndpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+  namespaceSelector:
+    matchNames:
+    - ops-system
+

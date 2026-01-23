@@ -1,0 +1,452 @@
+{
+    "title": "Ops Proxy",
+    "tags": ["ops-proxy", "proxy", "peer"],
+    "timezone": "browser",
+    "schemaVersion": 27,
+    "version": 2,
+    "refresh": "",
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "type": "stat",
+        "title": "Peer Status",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "max_over_time(ops_proxy_server_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}[5m]) or max_over_time(ops_proxy_client_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "{{pod}}",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 2,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "type": "stat",
+        "title": "Total Registered Services",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "sum(ops_proxy_clients_total{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}) by (pod)",
+            "refId": "A",
+            "legendFormat": "{{pod}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "type": "stat",
+        "title": "Connected Services",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "sum(ops_proxy_clients_connected{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}) by (pod)",
+            "refId": "A",
+            "legendFormat": "{{pod}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "thresholds"},
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            },
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "type": "stat",
+        "title": "Peer Instances",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "count(ops_proxy_server_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}) + count(ops_proxy_client_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"})",
+            "refId": "A",
+            "legendFormat": "Peers"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+        "type": "graph",
+        "title": "Peer Registration Refresh",
+        "description": "Peer re-registers services periodically (default 30s) to keep listening peer state fresh (no heartbeat).",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "rate(ops_proxy_client_registrations_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "{{client_name}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Refresh/sec"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+        "type": "graph",
+        "title": "Proxy Requests Rate",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "rate(ops_proxy_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "{{client_name}} - {{protocol}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Requests/sec"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32},
+        "type": "graph",
+        "title": "Proxy Success Rate",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "rate(ops_proxy_requests_success_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m]) / rate(ops_proxy_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "{{client_name}} - {{protocol}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "percentunit",
+            "label": "Success Rate",
+            "max": 1,
+            "min": 0
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+        "type": "graph",
+        "title": "Proxy Failure Rate",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "rate(ops_proxy_requests_failed_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m]) / rate(ops_proxy_requests_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "{{client_name}} - {{protocol}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "percentunit",
+            "label": "Failure Rate",
+            "max": 1,
+            "min": 0
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 40},
+        "type": "graph",
+        "title": "Connection Bytes (TX/RX)",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "rate(ops_proxy_connections_bytes_tx_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "TX - {{client_name}} - {{pod}}",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(ops_proxy_connections_bytes_rx_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "RX - {{client_name}} - {{pod}}",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "Bps",
+            "label": "Bytes/sec"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 48},
+        "type": "graph",
+        "title": "Active Connections",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "ops_proxy_connections_active{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}",
+            "legendFormat": "{{client_name}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Connections"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 56},
+        "type": "graph",
+        "title": "Proxy Latency",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "ops_proxy_latency_seconds{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}",
+            "legendFormat": "{{client_name}} - {{protocol}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "s",
+            "label": "Latency"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 64},
+        "type": "graph",
+        "title": "Pending DATA (proxy-id) / Timeouts / Unexpected",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "ops_proxy_pending_data_connections{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}",
+            "legendFormat": "pending - {{pod}}",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(ops_proxy_data_connections_timeout_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "timeout/s - {{client_name}} - {{pod}}",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(ops_proxy_data_connections_unexpected_total{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}[5m])",
+            "legendFormat": "unexpected/s - {{pod}}",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Count"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 13,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 72},
+        "type": "graph",
+        "title": "Proxy Errors (rate by reason)",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "sum by (client_name, reason, pod) (rate(ops_proxy_proxy_errors_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m]))",
+            "legendFormat": "{{reason}} - {{client_name}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Errors/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 14,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 80},
+        "type": "graph",
+        "title": "Peer Process CPU Usage",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "(rate(process_cpu_seconds_total{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}[5m]) * on (cluster, namespace, pod) group_left() (ops_proxy_server_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"} or ops_proxy_client_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}))",
+            "legendFormat": "{{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "CPU Usage"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 88},
+        "type": "graph",
+        "title": "Peer Process Memory Usage",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "(process_resident_memory_bytes{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"} * on (cluster, namespace, pod) group_left() (ops_proxy_server_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"} or ops_proxy_client_info{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}))",
+            "legendFormat": "{{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "bytes",
+            "label": "Memory"
+          },
+          {
+            "format": "short"
+          }
+        ]
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus",
+          "current": {
+            "text": "ops",
+            "value": "ops"
+          },
+          "options": [],
+          "hide": 0,
+          "label": "datasource"
+        },
+        {
+          "name": "cluster",
+          "type": "query",
+          "datasource": "$datasource",
+          "query": "label_values(ops_proxy_server_info or ops_proxy_client_info, cluster)",
+          "refresh": 1,
+          "regex": "",
+          "sort": 0,
+          "multi": false,
+          "includeAll": true,
+          "allValue": ".*",
+          "hide": 0,
+          "label": "cluster"
+        },
+        {
+          "name": "namespace",
+          "type": "query",
+          "datasource": "$datasource",
+          "query": "label_values((ops_proxy_server_info or ops_proxy_client_info){cluster=~\"$cluster\"}, namespace)",
+          "refresh": 1,
+          "regex": "",
+          "sort": 0,
+          "multi": false,
+          "includeAll": true,
+          "allValue": ".*",
+          "hide": 0,
+          "label": "namespace"
+        },
+        {
+          "name": "pod",
+          "type": "query",
+          "datasource": "$datasource",
+          "query": "label_values((ops_proxy_server_info or ops_proxy_client_info){cluster=~\"$cluster\", namespace=~\"$namespace\"}, pod)",
+          "refresh": 1,
+          "regex": "",
+          "sort": 0,
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "hide": 0,
+          "label": "pod"
+        },
+        {
+          "name": "name",
+          "type": "query",
+          "datasource": "$datasource",
+          "query": "label_values(ops_proxy_client_registrations_total{cluster=~\"$cluster\", namespace=~\"$namespace\", pod=~\"$pod\"}, client_name)",
+          "refresh": 1,
+          "regex": "",
+          "sort": 1,
+          "multi": true,
+          "includeAll": true,
+          "allValue": ".*",
+          "hide": 0,
+          "label": "name"
+        }
+      ]
+    },
+    "annotations": {
+      "list": []
+    },
+    "editable": true,
+    "gnetId": null,
+    "graphTooltip": 1,
+    "links": [],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "uid": "ops-proxy-peer-dashboard"
+}

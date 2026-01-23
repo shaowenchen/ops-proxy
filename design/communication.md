@@ -38,6 +38,12 @@ Peer A 通过 IP 192.0.2.1:6443 对外暴露。
 3. 同时注册到 services map（用于路由查找）
 4. 打印完整的 peerServices map 结构
 
+链接其他 Peer 时，可选使用 REMOTE_PEER_ADDR 配置代理地址，用于跨区域通信。
+
+每个 Peer 都可能有一个 REMOTE_PEER_ADDR 配置，用于提供给其他 Peer 连接到自己。
+
+REMOTE_PEER_ADDR 只是用于连接到其他 Peer，不作为 Peer 的唯一标识。
+
 ## 3. 数据转发阶段
 
 ### 3.1 转发模式

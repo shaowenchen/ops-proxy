@@ -11,9 +11,10 @@ const (
 )
 
 type Registration struct {
-	Name    string
-	Backend string
-	PeerID  string // Optional: peer identifier for better visibility
+	Name     string
+	Backend  string
+	PeerID   string // Optional: peer identifier for better visibility
+	PeerAddr string // Optional: peer's bind address for DATA connections
 }
 
 func TrimLine(line string) string {
@@ -66,9 +67,10 @@ func FormatRegister(regs []Registration) string {
 	return CmdRegister + ":" + strings.Join(parts, ",") + "\n"
 }
 
-// FormatRegisterWithPeerID formats REGISTER command with peer ID
-// Format: REGISTER:peer_id:name1:backend1,name2:backend2,...
-func FormatRegisterWithPeerID(peerID string, regs []Registration) string {
+// FormatRegisterWithPeerID formats REGISTER command with peer ID and peer address
+// Format: REGISTER:peer_id:peer_addr:name1:backend1,name2:backend2,...
+// peer_addr is the peer's bind address (e.g., "10.0.1.2:6443") for DATA connections
+func FormatRegisterWithPeerID(peerID, peerAddr string, regs []Registration) string {
 	if peerID == "" {
 		return FormatRegister(regs)
 	}
@@ -79,7 +81,8 @@ func FormatRegisterWithPeerID(peerID string, regs []Registration) string {
 		}
 		parts = append(parts, strings.TrimSpace(r.Name)+":"+strings.TrimSpace(r.Backend))
 	}
-	return CmdRegister + ":" + peerID + ":" + strings.Join(parts, ",") + "\n"
+	// Include peer_addr in the protocol
+	return CmdRegister + ":" + peerID + ":" + peerAddr + ":" + strings.Join(parts, ",") + "\n"
 }
 
 func ParseRegisterLine(line string) (regs []Registration, ok bool) {
@@ -92,36 +95,37 @@ func ParseRegisterLine(line string) (regs []Registration, ok bool) {
 		return nil, true
 	}
 
-	// Try to parse with peer_id first (new format): REGISTER:peer_id:name1:backend1,...
-	// Check if first part before first comma contains exactly 2 colons (peer_id:name:backend pattern)
-	commaIdx := strings.Index(rest, ",")
-	var peerID string
+	// Try to parse new format: REGISTER:peer_id:peer_addr:name1:backend1,...
+	// Check if it starts with peer_id:peer_addr prefix
+	var peerID, peerAddr string
 	var servicesPart string
 	
-	if commaIdx == -1 {
-		// Single service, check colon count
-		colonCount := strings.Count(rest, ":")
-		if colonCount >= 2 {
-			// New format with peer_id
-			parts := strings.SplitN(rest, ":", 2)
+	// Look for pattern: starts with at least 3 colons before first comma
+	commaIdx := strings.Index(rest, ",")
+	checkPart := rest
+	if commaIdx > 0 {
+		checkPart = rest[:commaIdx]
+	}
+	
+	colonCount := strings.Count(checkPart, ":")
+	if colonCount >= 3 {
+		// New format: REGISTER:peer_id:peer_addr:name:backend,...
+		parts := strings.SplitN(rest, ":", 3)
+		if len(parts) >= 3 {
 			peerID = strings.TrimSpace(parts[0])
-			servicesPart = parts[1]
+			peerAddr = strings.TrimSpace(parts[1])
+			servicesPart = parts[2]
 		} else {
-			// Old format without peer_id
 			servicesPart = rest
 		}
+	} else if colonCount >= 2 {
+		// Medium format: REGISTER:peer_id:name:backend,...
+		parts := strings.SplitN(rest, ":", 2)
+		peerID = strings.TrimSpace(parts[0])
+		servicesPart = parts[1]
 	} else {
-		firstService := rest[:commaIdx]
-		colonCount := strings.Count(firstService, ":")
-		if colonCount >= 2 {
-			// New format: extract peer_id from first part
-			parts := strings.SplitN(rest, ":", 2)
-			peerID = strings.TrimSpace(parts[0])
-			servicesPart = parts[1]
-		} else {
-			// Old format
-			servicesPart = rest
-		}
+		// Old format: REGISTER:name:backend,...
+		servicesPart = rest
 	}
 
 	items := strings.Split(servicesPart, ",")
@@ -138,7 +142,12 @@ func ParseRegisterLine(line string) (regs []Registration, ok bool) {
 		}
 		name := strings.TrimSpace(item[:idx])
 		backend := strings.TrimSpace(item[idx+1:])
-		regs = append(regs, Registration{Name: name, Backend: backend, PeerID: peerID})
+		regs = append(regs, Registration{
+			Name:     name,
+			Backend:  backend,
+			PeerID:   peerID,
+			PeerAddr: peerAddr,
+		})
 	}
 	return regs, true
 }
@@ -155,9 +164,10 @@ func FormatSync(regs []Registration) string {
 	return CmdSync + ":" + strings.Join(parts, ",") + "\n"
 }
 
-// FormatSyncWithPeerID formats SYNC command with peer ID
-// Format: SYNC:peer_id:name1:backend1,name2:backend2,...
-func FormatSyncWithPeerID(peerID string, regs []Registration) string {
+// FormatSyncWithPeerID formats SYNC command with peer ID and peer address
+// Format: SYNC:peer_id:peer_addr:name1:backend1,name2:backend2,...
+// peer_addr is the peer's bind address for DATA connections
+func FormatSyncWithPeerID(peerID, peerAddr string, regs []Registration) string {
 	if peerID == "" {
 		return FormatSync(regs)
 	}
@@ -168,11 +178,11 @@ func FormatSyncWithPeerID(peerID string, regs []Registration) string {
 		}
 		parts = append(parts, strings.TrimSpace(r.Name)+":"+strings.TrimSpace(r.Backend))
 	}
-	return CmdSync + ":" + peerID + ":" + strings.Join(parts, ",") + "\n"
+	return CmdSync + ":" + peerID + ":" + peerAddr + ":" + strings.Join(parts, ",") + "\n"
 }
 
 // ParseSyncLine parses a SYNC command line
-// Supports both old format (SYNC:name:backend,...) and new format (SYNC:peer_id:name:backend,...)
+// Supports old format (SYNC:name:backend,...) and new format (SYNC:peer_id:peer_addr:name:backend,...)
 func ParseSyncLine(line string) (regs []Registration, ok bool) {
 	line = TrimLine(line)
 	if !strings.HasPrefix(line, CmdSync+":") {
@@ -183,35 +193,36 @@ func ParseSyncLine(line string) (regs []Registration, ok bool) {
 		return nil, true
 	}
 
-	// Try to parse with peer_id first (new format): SYNC:peer_id:name1:backend1,...
-	commaIdx := strings.Index(rest, ",")
-	var peerID string
+	// Try to parse new format: SYNC:peer_id:peer_addr:name1:backend1,...
+	var peerID, peerAddr string
 	var servicesPart string
 	
-	if commaIdx == -1 {
-		// Single service, check colon count
-		colonCount := strings.Count(rest, ":")
-		if colonCount >= 2 {
-			// New format with peer_id
-			parts := strings.SplitN(rest, ":", 2)
+	// Look for pattern: starts with at least 3 colons before first comma
+	commaIdx := strings.Index(rest, ",")
+	checkPart := rest
+	if commaIdx > 0 {
+		checkPart = rest[:commaIdx]
+	}
+	
+	colonCount := strings.Count(checkPart, ":")
+	if colonCount >= 3 {
+		// New format: SYNC:peer_id:peer_addr:name:backend,...
+		parts := strings.SplitN(rest, ":", 3)
+		if len(parts) >= 3 {
 			peerID = strings.TrimSpace(parts[0])
-			servicesPart = parts[1]
+			peerAddr = strings.TrimSpace(parts[1])
+			servicesPart = parts[2]
 		} else {
-			// Old format without peer_id
 			servicesPart = rest
 		}
+	} else if colonCount >= 2 {
+		// Medium format: SYNC:peer_id:name:backend,...
+		parts := strings.SplitN(rest, ":", 2)
+		peerID = strings.TrimSpace(parts[0])
+		servicesPart = parts[1]
 	} else {
-		firstService := rest[:commaIdx]
-		colonCount := strings.Count(firstService, ":")
-		if colonCount >= 2 {
-			// New format: extract peer_id from first part
-			parts := strings.SplitN(rest, ":", 2)
-			peerID = strings.TrimSpace(parts[0])
-			servicesPart = parts[1]
-		} else {
-			// Old format
-			servicesPart = rest
-		}
+		// Old format: SYNC:name:backend,...
+		servicesPart = rest
 	}
 
 	items := strings.Split(servicesPart, ",")
@@ -228,7 +239,12 @@ func ParseSyncLine(line string) (regs []Registration, ok bool) {
 		}
 		name := strings.TrimSpace(item[:idx])
 		backend := strings.TrimSpace(item[idx+1:])
-		regs = append(regs, Registration{Name: name, Backend: backend, PeerID: peerID})
+		regs = append(regs, Registration{
+			Name:     name,
+			Backend:  backend,
+			PeerID:   peerID,
+			PeerAddr: peerAddr,
+		})
 	}
 	return regs, true
 }

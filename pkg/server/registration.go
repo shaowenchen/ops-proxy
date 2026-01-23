@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -136,10 +137,11 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			logging.Logf("[request][debug] registration parsed (remote=%s count=%d items=%s)", clientIP, len(items), strings.Join(items, ","))
 		}
 		registeredCount := 0
-		// Extract peer_id from first registration (all should have the same peer_id)
-		var peerID string
+		// Extract peer_id and peer_addr from first registration (all should have the same)
+		var peerID, peerAddr string
 		if len(regs) > 0 {
 			peerID = regs[0].PeerID
+			peerAddr = regs[0].PeerAddr
 		}
 		for _, reg := range regs {
 			clientName := strings.TrimSpace(reg.Name)
@@ -153,9 +155,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				backendAddr = routing.NormalizeBackendAddr(backendAddr, "localhost")
 			}
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] registering service (remote=%s name=%q backend=%q peer_id=%q)", clientIP, clientName, backendAddr, peerID)
+				logging.Logf("[request][debug] registering service (remote=%s name=%q backend=%q peer_id=%q peer_addr=%q)", clientIP, clientName, backendAddr, peerID, peerAddr)
 			}
-			s.RegisterClientByNameWithPeerID(clientName, clientIP, backendAddr, conn, peerID)
+			s.RegisterClientByNameWithPeerInfo(clientName, clientIP, backendAddr, conn, peerID, peerAddr)
 			registeredCount++
 		}
 		if registeredCount > 0 {
@@ -179,13 +181,14 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			if len(allServices) > 0 {
 				regs := make([]protocol.Registration, 0, len(allServices))
 				peerID := logging.GetPeerID()
+				peerAddr := s.getPeerBindAddr(cfg)
 				for _, svc := range allServices {
 					regs = append(regs, protocol.Registration{
 						Name:    svc.Name,
 						Backend: svc.Backend,
 					})
 				}
-				syncMsg := protocol.FormatSyncWithPeerID(peerID, regs)
+				syncMsg := protocol.FormatSyncWithPeerID(peerID, peerAddr, regs)
 				logging.Logf("[registry] sending service sync (remote=%s count=%d)", clientIP, len(regs))
 				if cfg != nil && cfg.Log.Level == "debug" {
 					logging.Logf("[request][debug] sending service sync (remote=%s count=%d)", clientIP, len(regs))
@@ -236,18 +239,22 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		if strings.HasPrefix(line, protocol.CmdForward+":") {
 			proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line)
 			if ok {
-				// Get full remote address (IP:port) for DATA connection
-				peerAddr := ""
-				if conn != nil && conn.RemoteAddr() != nil {
-					peerAddr = conn.RemoteAddr().String()
+				// Find the peer that sent this FORWARD command using the connection
+				// We need the peer's real bind address (not the central gateway address)
+				sourcePeerAddr := s.findPeerAddrByConn(conn)
+				if sourcePeerAddr == "" {
+					// Fallback to connection's remote address (might be gateway)
+					if conn != nil && conn.RemoteAddr() != nil {
+						sourcePeerAddr = conn.RemoteAddr().String()
+					}
 				}
-				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_peer=%s", proxyID, name, backendAddr, peerAddr)
+				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_peer=%s", proxyID, name, backendAddr, sourcePeerAddr)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] FORWARD command received (remote=%s proxy_id=%s name=%s backend=%s)", peerAddr, proxyID, name, backendAddr)
+					logging.Logf("[request][debug] FORWARD command received (from_peer=%s proxy_id=%s name=%s backend=%s)", sourcePeerAddr, proxyID, name, backendAddr)
 				}
 				// Handle FORWARD request: connect to backend and establish DATA connection
 				// Run in goroutine to avoid blocking the control connection
-				go s.handleForwardRequest(peerAddr, proxyID, name, backendAddr, cfg)
+				go s.handleForwardRequest(sourcePeerAddr, proxyID, name, backendAddr, cfg)
 			} else {
 				logging.Logf("[server] invalid FORWARD message (remote=%s message=%q)", clientIP, line)
 			}
@@ -381,10 +388,11 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 
 	// Step 2: Also register to services map (for routing lookup)
 	// This allows the service to be found during routing
-	// Extract peer_id from first registration (all should have the same peer_id)
-	var syncPeerID string
+	// Extract peer_id and peer_addr from first registration (all should have the same)
+	var syncPeerID, syncPeerAddr string
 	if len(regs) > 0 {
 		syncPeerID = regs[0].PeerID
+		syncPeerAddr = regs[0].PeerAddr
 	}
 	for _, reg := range regs {
 		name := strings.TrimSpace(reg.Name)
@@ -392,8 +400,8 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 		if name == "" || backend == "" {
 			continue
 		}
-		logging.Logf("[registry] registering synced service name=%q backend=%q peer=%s peer_id=%q conn=%v", name, backend, peerIP, syncPeerID, peerConn != nil)
-		s.RegisterClientByNameWithPeerID(name, peerIP, backend, peerConn, syncPeerID)
+		logging.Logf("[registry] registering synced service name=%q backend=%q peer=%s peer_id=%q peer_addr=%q conn=%v", name, backend, peerIP, syncPeerID, syncPeerAddr, peerConn != nil)
+		s.RegisterClientByNameWithPeerInfo(name, peerIP, backend, peerConn, syncPeerID, syncPeerAddr)
 	}
 
 	logging.Logf("[registry] updated peer services (peer=%s count=%d)", peerIP, len(peerSvc.Services))
@@ -514,4 +522,81 @@ func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr 
 	if s.collector != nil {
 		s.collector.RecordForwardCommand(name)
 	}
+}
+
+// getPeerBindAddr returns this peer's bind address for DATA connections
+// Uses POD_IP:port if available, otherwise hostname:port or bind_addr from config
+func (s *ProxyServer) getPeerBindAddr(cfg *config.Config) string {
+	bindAddr := ":6443"
+	if cfg != nil && cfg.Peer.BindAddr != "" {
+		bindAddr = cfg.Peer.BindAddr
+	}
+	
+	// Extract port
+	_, port, err := net.SplitHostPort(bindAddr)
+	if err != nil {
+		port = "6443"
+	}
+	
+	// Try POD_IP first (Kubernetes)
+	podIP := os.Getenv("POD_IP")
+	if podIP != "" {
+		return net.JoinHostPort(podIP, port)
+	}
+	
+	// Try hostname resolution
+	hostname := os.Getenv("HOSTNAME")
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
+	
+	if hostname != "" {
+		ips, err := net.LookupHost(hostname)
+		if err == nil && len(ips) > 0 {
+			return net.JoinHostPort(ips[0], port)
+		}
+		return net.JoinHostPort(hostname, port)
+	}
+	
+	return bindAddr
+}
+
+// findPeerAddrByConn finds the peer's real bind address by connection
+// Returns the PeerAddr stored during registration, not the connection's RemoteAddr
+func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
+	if conn == nil {
+		logging.Logf("[server] findPeerAddrByConn: conn is nil")
+		return ""
+	}
+	
+	s.clientsLock.RLock()
+	defer s.clientsLock.RUnlock()
+	
+	connRemote := "unknown"
+	if conn.RemoteAddr() != nil {
+		connRemote = conn.RemoteAddr().String()
+	}
+	
+	logging.Logf("[server] findPeerAddrByConn: searching for conn=%v, total_services=%d", connRemote, len(s.services))
+	
+	// Find any service registered with this connection
+	for key, client := range s.services {
+		if client == nil {
+			continue
+		}
+		
+		// Check if this is the same connection
+		if client.Conn == conn {
+			logging.Logf("[server] findPeerAddrByConn: found match key=%s peer_id=%s peer_addr=%s ip=%s", key, client.PeerID, client.PeerAddr, client.IP)
+			if client.PeerAddr != "" {
+				logging.Logf("[server] found peer_addr=%s (peer_id=%s) for conn=%v", client.PeerAddr, client.PeerID, connRemote)
+				return client.PeerAddr
+			} else {
+				logging.Logf("[server] peer_addr is empty for key=%s (peer_id=%s), checking other services with same conn", key, client.PeerID)
+			}
+		}
+	}
+	
+	logging.Logf("[server] peer_addr not found for conn=%v, will use RemoteAddr as fallback", connRemote)
+	return ""
 }

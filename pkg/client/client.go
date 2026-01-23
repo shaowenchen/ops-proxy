@@ -233,19 +233,27 @@ func connectToPeer(peerAddr string, registrations []struct {
 		conn := link.Conn
 		logging.Logf("Connected to peer %s", link.Addr)
 
-		// Build registration message with peer_id for better visibility
+		// Build registration message with peer_id and peer_addr
 		regs := make([]protocol.Registration, 0, len(registrations))
 		peerID := logging.GetPeerID()
+		
+		// Get peer's real bind address for DATA connections
+		// Use POD_IP:BIND_PORT if available, otherwise use bind_addr from config
+		peerAddr := getPeerBindAddr(cfg)
+		
+		logging.Logf("[client] preparing registration peer_id=%s peer_addr=%s services=%d", peerID, peerAddr, len(registrations))
+		
 		for _, reg := range registrations {
 			regs = append(regs, protocol.Registration{Name: reg.name, Backend: reg.backendAddr})
 		}
-		registration := protocol.FormatRegisterWithPeerID(peerID, regs)
+		registration := protocol.FormatRegisterWithPeerID(peerID, peerAddr, regs)
+		
 		if cfg != nil && cfg.Log.Level == "debug" {
 			items := make([]string, 0, len(regs))
 			for _, r := range regs {
 				items = append(items, fmt.Sprintf("%s->%s", r.Name, r.Backend))
 			}
-			logging.Logf("[request][debug] sending registration (peer=%s count=%d items=%s)", link.Addr, len(regs), strings.Join(items, ","))
+			logging.Logf("[request][debug] sending registration (peer=%s peer_id=%s peer_addr=%s count=%d items=%s msg=%q)", link.Addr, peerID, peerAddr, len(regs), strings.Join(items, ","), strings.TrimSpace(registration))
 		}
 
 		_, err := conn.Write([]byte(registration))
@@ -557,4 +565,47 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	
 	recordClientForwardSuccess(name)
 	return nil
+}
+
+// getPeerBindAddr returns the peer's real bind address for DATA connections
+// Priority: POD_IP:port > hostname:port > bind_addr from config
+func getPeerBindAddr(cfg *config.Config) string {
+	// Get bind port from config
+	bindAddr := ":6443"
+	if cfg != nil && cfg.Peer.BindAddr != "" {
+		bindAddr = cfg.Peer.BindAddr
+	}
+	
+	// Extract port from bind_addr
+	_, port, err := net.SplitHostPort(bindAddr)
+	if err != nil {
+		// If bind_addr is not in host:port format, use it as-is
+		port = "6443"
+	}
+	
+	// Try to get POD_IP (Kubernetes environment)
+	podIP := os.Getenv("POD_IP")
+	if podIP != "" {
+		return net.JoinHostPort(podIP, port)
+	}
+	
+	// Try to get hostname and resolve to IP
+	hostname := os.Getenv("HOSTNAME")
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
+	
+	if hostname != "" {
+		// Try to resolve hostname to IP
+		ips, err := net.LookupHost(hostname)
+		if err == nil && len(ips) > 0 {
+			// Use first IP
+			return net.JoinHostPort(ips[0], port)
+		}
+		// If resolution fails, use hostname directly
+		return net.JoinHostPort(hostname, port)
+	}
+	
+	// Fallback: use bind_addr from config
+	return bindAddr
 }

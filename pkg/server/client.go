@@ -23,6 +23,11 @@ func (s *ProxyServer) RegisterClientByName(name, ip, backendAddr string, conn ne
 
 // RegisterClientByNameWithPeerID registers a client with explicit peer ID
 func (s *ProxyServer) RegisterClientByNameWithPeerID(name, ip, backendAddr string, conn net.Conn, peerID string) {
+	s.RegisterClientByNameWithPeerInfo(name, ip, backendAddr, conn, peerID, "")
+}
+
+// RegisterClientByNameWithPeerInfo registers a client with peer ID and peer address
+func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr string, conn net.Conn, peerID, peerAddr string) {
 	s.clientsLock.Lock()
 
 	// If conn is nil but IP is not "local", try to find existing connection from that IP
@@ -73,6 +78,7 @@ func (s *ProxyServer) RegisterClientByNameWithPeerID(name, ip, backendAddr strin
 		Connected:   connected,
 		ConnMu:      connMu,
 		PeerID:      peerID,
+		PeerAddr:    peerAddr,
 	}
 	// Use name as key so we can route to the corresponding backend by name
 	s.clients[name] = info
@@ -87,7 +93,7 @@ func (s *ProxyServer) RegisterClientByNameWithPeerID(name, ip, backendAddr strin
 			connInfo = "no-remote-addr"
 		}
 	}
-	logging.Logf("[registry] registered name=%q ip=%s backend=%q connected=%t conn=%v conn_info=%s", name, ip, backendAddr, connected, conn != nil, connInfo)
+	logging.Logf("[registry] registered name=%q ip=%s backend=%q peer_id=%q peer_addr=%q connected=%t conn=%v conn_info=%s", name, ip, backendAddr, peerID, peerAddr, connected, conn != nil, connInfo)
 	
 	// Update metrics
 	if s.collector != nil {
@@ -340,6 +346,8 @@ func (s *ProxyServer) logPeerServicesMap() {
 }
 
 func serviceKey(name, source string) string {
+	// Note: source here is IP for backward compatibility
+	// In the future, we should use PeerID instead of IP for better identification
 	return strings.TrimSpace(name) + "@" + strings.TrimSpace(source)
 }
 
@@ -358,7 +366,12 @@ func (s *ProxyServer) servicesDebugSnapshot() string {
 		if c == nil {
 			continue
 		}
-		items = append(items, c.Name+"@"+c.IP)
+		// Use PeerID for better identification (not IP which might be proxy)
+		peerIdentifier := c.PeerID
+		if peerIdentifier == "" {
+			peerIdentifier = c.IP
+		}
+		items = append(items, c.Name+"@"+peerIdentifier)
 	}
 	sort.Strings(items)
 	return strings.Join(items, ",")

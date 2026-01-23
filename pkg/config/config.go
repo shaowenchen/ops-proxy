@@ -22,6 +22,7 @@ type Config struct {
 type PeerConfig struct {
 	// Listening configuration
 	BindAddr                 string `yaml:"bind_addr"`                  // Local peer listening address (format: ip:port or :port, e.g., "127.0.0.1:6443" or ":6443")
+	LocalPeerAddr            string `yaml:"local_peer_addr"`            // Local peer address for other peers to connect (optional, e.g., "lb.example.com:6443"). If not set, uses POD_IP:port
 	ListenAddress            string `yaml:"listen_address"`            // Metrics listener address
 	TelemetryPath            string `yaml:"telemetry_path"`            // Metrics path
 	ConnectionTimeout        int    `yaml:"connection_timeout"`       // Timeout waiting for peer DATA connection after FORWARD (seconds)
@@ -198,6 +199,9 @@ func (c *Config) ApplyEnvOverrides() {
 	// Peer connection config
 	if val := os.Getenv("REMOTE_PEER_ADDR"); val != "" {
 		c.Peer.RemotePeerAddr = val
+	}
+	if val := os.Getenv("LOCAL_PEER_ADDR"); val != "" {
+		c.Peer.LocalPeerAddr = val
 	}
 	if val := os.Getenv("SERVICE_ADDR"); val != "" {
 		c.Peer.ServiceAddr = val

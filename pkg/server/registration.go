@@ -524,8 +524,9 @@ func (s *ProxyServer) handleForwardRequest(peerAddr, proxyID, name, backendAddr 
 	}
 }
 
-// getPeerBindAddr returns this peer's bind address for DATA connections
-// Uses POD_IP:port if available, otherwise hostname:port or bind_addr from config
+// getPeerBindAddr returns this peer's address for other peers to connect (for DATA connections)
+// Design: Each peer can configure LOCAL_PEER_ADDR as its external address
+// Priority: LOCAL_PEER_ADDR (config) > POD_IP:port > hostname:port > bind_addr
 func (s *ProxyServer) getPeerBindAddr(cfg *config.Config) string {
 	bindAddr := ":6443"
 	if cfg != nil && cfg.Peer.BindAddr != "" {
@@ -538,13 +539,23 @@ func (s *ProxyServer) getPeerBindAddr(cfg *config.Config) string {
 		port = "6443"
 	}
 	
-	// Try POD_IP first (Kubernetes)
-	podIP := os.Getenv("POD_IP")
-	if podIP != "" {
-		return net.JoinHostPort(podIP, port)
+	// Priority 1: LOCAL_PEER_ADDR (explicitly configured local address)
+	// Design doc: "每个 Peer 都可能有一个配置，用于提供给其他 Peer 连接到自己"
+	// Can be LoadBalancer, Service name, or direct IP
+	if cfg != nil && cfg.Peer.LocalPeerAddr != "" {
+		logging.Logf("[server] using LOCAL_PEER_ADDR as peer_addr: %s", cfg.Peer.LocalPeerAddr)
+		return cfg.Peer.LocalPeerAddr
 	}
 	
-	// Try hostname resolution
+	// Priority 2: POD_IP:port (Kubernetes)
+	podIP := os.Getenv("POD_IP")
+	if podIP != "" {
+		addr := net.JoinHostPort(podIP, port)
+		logging.Logf("[server] using POD_IP as peer_addr: %s", addr)
+		return addr
+	}
+	
+	// Priority 3: Hostname resolution
 	hostname := os.Getenv("HOSTNAME")
 	if hostname == "" {
 		hostname, _ = os.Hostname()
@@ -553,11 +564,16 @@ func (s *ProxyServer) getPeerBindAddr(cfg *config.Config) string {
 	if hostname != "" {
 		ips, err := net.LookupHost(hostname)
 		if err == nil && len(ips) > 0 {
-			return net.JoinHostPort(ips[0], port)
+			addr := net.JoinHostPort(ips[0], port)
+			logging.Logf("[server] using hostname IP as peer_addr: %s", addr)
+			return addr
 		}
-		return net.JoinHostPort(hostname, port)
+		addr := net.JoinHostPort(hostname, port)
+		logging.Logf("[server] using hostname as peer_addr: %s", addr)
+		return addr
 	}
 	
+	logging.Logf("[server] using bind_addr as peer_addr (fallback): %s", bindAddr)
 	return bindAddr
 }
 

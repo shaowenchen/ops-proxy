@@ -567,8 +567,9 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	return nil
 }
 
-// getPeerBindAddr returns the peer's real bind address for DATA connections
-// Priority: POD_IP:port > hostname:port > bind_addr from config
+// getPeerBindAddr returns the peer's address for other peers to connect (for DATA connections)
+// Design: Each peer can configure LOCAL_PEER_ADDR as its external address for other peers
+// Priority: LOCAL_PEER_ADDR (config) > POD_IP:port > hostname:port > bind_addr
 func getPeerBindAddr(cfg *config.Config) string {
 	// Get bind port from config
 	bindAddr := ":6443"
@@ -579,17 +580,26 @@ func getPeerBindAddr(cfg *config.Config) string {
 	// Extract port from bind_addr
 	_, port, err := net.SplitHostPort(bindAddr)
 	if err != nil {
-		// If bind_addr is not in host:port format, use it as-is
 		port = "6443"
 	}
 	
-	// Try to get POD_IP (Kubernetes environment)
-	podIP := os.Getenv("POD_IP")
-	if podIP != "" {
-		return net.JoinHostPort(podIP, port)
+	// Priority 1: LOCAL_PEER_ADDR (explicitly configured local address)
+	// This allows each peer to specify its address for other peers to connect
+	// Can be LoadBalancer, Service name, or direct IP
+	if cfg != nil && cfg.Peer.LocalPeerAddr != "" {
+		logging.Logf("[client] using LOCAL_PEER_ADDR as peer_addr: %s", cfg.Peer.LocalPeerAddr)
+		return cfg.Peer.LocalPeerAddr
 	}
 	
-	// Try to get hostname and resolve to IP
+	// Priority 2: POD_IP:port (Kubernetes environment)
+	podIP := os.Getenv("POD_IP")
+	if podIP != "" {
+		addr := net.JoinHostPort(podIP, port)
+		logging.Logf("[client] using POD_IP as peer_addr: %s", addr)
+		return addr
+	}
+	
+	// Priority 3: Hostname resolution
 	hostname := os.Getenv("HOSTNAME")
 	if hostname == "" {
 		hostname, _ = os.Hostname()
@@ -599,13 +609,17 @@ func getPeerBindAddr(cfg *config.Config) string {
 		// Try to resolve hostname to IP
 		ips, err := net.LookupHost(hostname)
 		if err == nil && len(ips) > 0 {
-			// Use first IP
-			return net.JoinHostPort(ips[0], port)
+			addr := net.JoinHostPort(ips[0], port)
+			logging.Logf("[client] using hostname IP as peer_addr: %s", addr)
+			return addr
 		}
 		// If resolution fails, use hostname directly
-		return net.JoinHostPort(hostname, port)
+		addr := net.JoinHostPort(hostname, port)
+		logging.Logf("[client] using hostname as peer_addr: %s", addr)
+		return addr
 	}
 	
 	// Fallback: use bind_addr from config
+	logging.Logf("[client] using bind_addr as peer_addr (fallback): %s", bindAddr)
 	return bindAddr
 }

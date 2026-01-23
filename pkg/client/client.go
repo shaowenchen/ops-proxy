@@ -17,15 +17,18 @@ import (
 	"github.com/ops-proxy/pkg/routing"
 )
 
+// PeerServerInterface defines the interface for proxy server operations
+type PeerServerInterface interface {
+	RegisterClientByName(name, ip, backendAddr string, conn net.Conn)
+	RegisterClientByNameWithPeerInfo(name, ip, backendAddr string, conn net.Conn, peerID, peerAddr string)
+	LogServicesTable()
+}
+
 // Run starts the peer connection client
 // Supports connecting to multiple peers and registering local services
 // Each service must have a domain name for routing (matched against Host/SNI)
 // proxyServer is optional; if provided, SYNC commands will register services to it
-func Run(cfg *config.Config, serverAddr, clientName, backendAddr string, proxyServer interface {
-	RegisterClientByName(name, ip, backendAddr string, conn net.Conn)
-	RegisterClientByNameWithPeerInfo(name, ip, backendAddr string, conn net.Conn, peerID, peerAddr string)
-	LogServicesTable()
-}) error {
+func Run(cfg *config.Config, serverAddr, clientName, backendAddr string, proxyServer PeerServerInterface) error {
 	// Get peer addresses and service addresses from config
 	var peerAddrs []string
 	var serviceAddr string

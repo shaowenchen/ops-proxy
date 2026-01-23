@@ -579,26 +579,36 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	if cfg != nil {
 		dialTimeout = cfg.GetDialTimeout()
 	}
-	logging.Logf("[server] handleForwardRequest: dialTimeout=%s proxy_id=%s", dialTimeout, proxyID)
+	logging.Logf("[server] handleForwardRequest: dialTimeout=%s proxy_id=%s cfg=%v", dialTimeout, proxyID, cfg != nil)
 
 	// Step 1: Connect to local backend
-	logging.Logf("[server] connecting to backend proxy_id=%s backend=%s", proxyID, backendAddr)
+	logging.Logf("[server] connecting to backend proxy_id=%s backend=%s timeout=%s", proxyID, backendAddr, dialTimeout)
+	startBackendDial := time.Now()
 	backendConn, err := net.DialTimeout("tcp", backendAddr, dialTimeout)
+	backendDialDuration := time.Since(startBackendDial)
 	if err != nil {
-		logging.Logf("[server] backend dial failed proxy_id=%s backend=%s err=%v", proxyID, backendAddr, err)
+		logging.Logf("[server] backend dial failed proxy_id=%s backend=%s err=%v duration=%s", proxyID, backendAddr, err, backendDialDuration)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "backend_dial_error")
 		}
 		return
 	}
 	defer backendConn.Close()
-	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s", proxyID, backendAddr, backendConn.LocalAddr())
+	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s duration=%s", proxyID, backendAddr, backendConn.LocalAddr(), backendDialDuration)
 
 	// Step 2: Establish DATA connection back to requesting peer
 	// Use the control connection's remote address to establish DATA connection
 	// The peer should be listening on the same address for DATA connections
-	if controlConn == nil || controlConn.RemoteAddr() == nil {
-		logging.Logf("[server] ERROR: control connection is nil or has no RemoteAddr, cannot establish DATA connection proxy_id=%s", proxyID)
+	logging.Logf("[server] checking control connection proxy_id=%s control_conn=%v", proxyID, controlConn != nil)
+	if controlConn == nil {
+		logging.Logf("[server] ERROR: control connection is nil, cannot establish DATA connection proxy_id=%s", proxyID)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "data_dial_error")
+		}
+		return
+	}
+	if controlConn.RemoteAddr() == nil {
+		logging.Logf("[server] ERROR: control connection has no RemoteAddr, cannot establish DATA connection proxy_id=%s", proxyID)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}

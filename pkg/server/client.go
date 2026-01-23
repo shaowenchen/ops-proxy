@@ -29,8 +29,6 @@ func (s *ProxyServer) RegisterClientByNameWithPeerID(name, ip, backendAddr strin
 
 // RegisterClientByNameWithPeerInfo registers a client with peer ID and peer address
 func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr string, conn net.Conn, peerID, peerAddr string) {
-	s.clientsLock.Lock()
-
 	// If conn is nil but IP is not "local", try to find existing connection from that IP
 	// This handles SYNC case where services are registered without a direct connection
 	if conn == nil && ip != "local" && ip != "" {
@@ -149,18 +147,12 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		s.collector.RecordClientRegistration(name)
 	}
 	
-	// Release lock before calling logServicesTable() which needs RLock()
-	// Otherwise we'll deadlock (can't acquire RLock while holding Lock in the same goroutine)
-	s.clientsLock.Unlock()
-	
 	// Note: logServicesTable() is now only called in debug mode
 	// If you need to print services table, use LogServicesTable() instead
 }
 
 // UnregisterClientByName unregisters a client by name
 func (s *ProxyServer) UnregisterClientByName(name string) {
-	s.clientsLock.Lock()
-	defer s.clientsLock.Unlock()
 
 	if client, exists := s.clients[name]; exists {
 		// Note: don't close connection, as other names might be using the same connection
@@ -185,8 +177,6 @@ func (s *ProxyServer) UnregisterClientByName(name string) {
 // For local services (IP="local"), returns even if Connected=false (no connection needed)
 // For remote services, only returns if Connected=true (need active connection)
 func (s *ProxyServer) GetClient(name string) *types.ClientInfo {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
 
 	logging.Logf("[GetClient] searching for name=%q services_count=%d", name, len(s.services))
 	candidates := make([]*types.ClientInfo, 0)
@@ -232,8 +222,6 @@ func (s *ProxyServer) GetClient(name string) *types.ClientInfo {
 // GetClients gets all clients (for metrics collection)
 // The returned map key is the registered name
 func (s *ProxyServer) GetClients() map[string]*types.ClientInfo {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
 
 	result := make(map[string]*types.ClientInfo)
 	for name, client := range s.clients {
@@ -245,8 +233,6 @@ func (s *ProxyServer) GetClients() map[string]*types.ClientInfo {
 
 // IsClientConnected checks if a client is connected
 func (s *ProxyServer) IsClientConnected(name string) bool {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
 
 	for _, client := range s.services {
 		if client != nil && client.Name == name && client.Connected {
@@ -258,8 +244,6 @@ func (s *ProxyServer) IsClientConnected(name string) bool {
 
 // UnregisterClientsByConn removes all registered names bound to the given connection.
 func (s *ProxyServer) UnregisterClientsByConn(conn net.Conn) {
-	s.clientsLock.Lock()
-	defer s.clientsLock.Unlock()
 
 	for name, client := range s.clients {
 		if client != nil && client.Conn == conn {
@@ -281,8 +265,6 @@ func (s *ProxyServer) UnregisterClientsByConn(conn net.Conn) {
 // servicesTableLines returns a stable table snapshot of current services map on this peer.
 // Prints the full map structure with all entries.
 func (s *ProxyServer) servicesTableLines() []string {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
 
 	if len(s.services) == 0 {
 		return []string{"svc_map={}"}
@@ -362,8 +344,6 @@ func (s *ProxyServer) LogServicesTable() {
 
 // logPeerServicesMap prints the full peerServices map structure
 func (s *ProxyServer) logPeerServicesMap() {
-	s.peerServicesLock.RLock()
-	defer s.peerServicesLock.RUnlock()
 	
 	peerID := logging.GetPeerID()
 	
@@ -418,8 +398,6 @@ func serviceKey(name, source string) string {
 // servicesDebugSnapshot returns a stable snapshot of current services for routing logs.
 // Format: name@peer, sorted by name.
 func (s *ProxyServer) servicesDebugSnapshot() string {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
 
 	if len(s.services) == 0 {
 		return "<empty>"
@@ -445,15 +423,6 @@ func (s *ProxyServer) servicesDebugSnapshot() string {
 // Format: peer_id=... backend=...
 func (s *ProxyServer) servicesByNameSnapshot(name string) string {
 	logging.Logf("[servicesByNameSnapshot] START name=%q", name)
-	logging.Logf("[servicesByNameSnapshot] about to acquire RLock name=%q", name)
-	s.clientsLock.RLock()
-	logging.Logf("[servicesByNameSnapshot] RLock acquired name=%q", name)
-	defer func() {
-		logging.Logf("[servicesByNameSnapshot] about to release RLock name=%q", name)
-		s.clientsLock.RUnlock()
-		logging.Logf("[servicesByNameSnapshot] RLock released name=%q", name)
-		logging.Logf("[servicesByNameSnapshot] END name=%q", name)
-	}()
 
 	logging.Logf("[servicesByNameSnapshot] services count=%d", len(s.services))
 	if strings.TrimSpace(name) == "" || len(s.services) == 0 {
@@ -534,8 +503,6 @@ func (s *ProxyServer) GetAllServicesExcept(excludeIP string) []struct {
 	Name    string
 	Backend string
 } {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
 
 	result := make([]struct {
 		Name    string

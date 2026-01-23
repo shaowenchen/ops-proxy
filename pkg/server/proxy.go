@@ -883,9 +883,6 @@ func generateProxyID() string {
 // clientsDebugSnapshot returns a stable snapshot of current clients on this server instance.
 // Format: name(up|down), sorted by name.
 func (s *ProxyServer) clientsDebugSnapshot() string {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
-
 	if len(s.clients) == 0 {
 		return "<empty>"
 	}
@@ -905,9 +902,6 @@ func (s *ProxyServer) clientsDebugSnapshot() string {
 // getDefaultClientName gets the default client name
 // Returns the first connected client's name
 func (s *ProxyServer) getDefaultClientName() string {
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
-
 	// Return first connected client's name
 	for name, client := range s.clients {
 		if client.Connected {

@@ -6,23 +6,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/ops-proxy/pkg/metrics"
 	"github.com/ops-proxy/pkg/types"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // ProxyServer proxy server
 type ProxyServer struct {
-	clients     map[string]*types.ClientInfo
-	services    map[string]*types.ClientInfo
-	clientsLock sync.RWMutex
-	registry    *prometheus.Registry
-	collector   *metrics.Collector
+	clients   map[string]*types.ClientInfo
+	services  map[string]*types.ClientInfo
+	registry  *prometheus.Registry
+	collector *metrics.Collector
 
 	// peerServices stores services from remote peers
 	// Key: peer IP address, Value: PeerServices struct
 	peerServices map[string]*types.PeerServices
-	peerServicesLock sync.RWMutex
 
 	// pendingData is used to pair a proxy request with the next DATA connection from client.
 	// Keyed by proxy-id. Supports concurrency per name.
@@ -35,4 +33,3 @@ type ProxyServer struct {
 	acceptEOFLastLogAt  time.Time
 	acceptEOFSuppressed int
 }
-

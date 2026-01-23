@@ -336,35 +336,6 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	logging.Logf("[registry] processing SYNC (peer_id=%s remote_peer_addr=%s count=%d conn=%v conn_info=%s)",
 		syncPeerID, peerIP, len(regs), conn != nil, connInfo)
 
-	// Step 1: Update peerServices map (store Peer B's complete service list)
-	s.peerServicesLock.Lock()
-	peerSvc, exists := s.peerServices[peerIP]
-	if !exists {
-		peerSvc = &types.PeerServices{
-			PeerIP:   peerIP,
-			Services: make(map[string]*types.ServiceInfo),
-			LastSync: time.Now().Unix(),
-		}
-		s.peerServices[peerIP] = peerSvc
-	}
-
-	// Update services map in peerServices (complete replacement)
-	peerSvc.Services = make(map[string]*types.ServiceInfo)
-	for _, reg := range regs {
-		name := strings.TrimSpace(reg.Name)
-		backend := strings.TrimSpace(reg.Backend)
-		if name == "" || backend == "" {
-			continue
-		}
-		peerSvc.Services[name] = &types.ServiceInfo{
-			Name:        name,
-			BackendAddr: backend,
-			SourcePeer:  peerIP,
-		}
-	}
-	peerSvc.LastSync = time.Now().Unix()
-	s.peerServicesLock.Unlock()
-
 	// Use the connection that sent the SYNC message
 	// This is the control connection from the peer
 	peerConn := conn
@@ -373,7 +344,6 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	// This handles cases where the connection might have been registered with a different IP
 	// (e.g., when connecting through a load balancer)
 	if peerConn == nil {
-		s.clientsLock.RLock()
 		logging.Logf("[registry] SYNC conn is nil, searching for peer connection (peer_id=%s remote_peer_addr=%s services_count=%d)",
 			syncPeerID, peerIP, len(s.services))
 		for key, svc := range s.services {
@@ -386,7 +356,6 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 				}
 			}
 		}
-		s.clientsLock.RUnlock()
 	}
 
 	// If still no connection, try to find by matching the connection's remote address
@@ -400,7 +369,6 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 		}
 
 		if connRemoteIP != "" && connRemoteIP != peerIP {
-			s.clientsLock.RLock()
 			logging.Logf("[registry] trying to find connection by remote IP (peerIP=%s connRemoteIP=%s)", peerIP, connRemoteIP)
 			for key, svc := range s.services {
 				if svc != nil && svc.Conn == conn {
@@ -409,7 +377,6 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 					break
 				}
 			}
-			s.clientsLock.RUnlock()
 		}
 	}
 
@@ -433,13 +400,46 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 			syncPeerID, peerIP, peerConn != nil, remoteAddr)
 	}
 
-	// Step 2: Also register to services map (for routing lookup)
-	// This allows the service to be found during routing
-	// Extract peer_addr from first registration (syncPeerID already extracted above)
+	// Extract peer_addr from first registration
 	syncPeerAddr := ""
 	if len(regs) > 0 {
 		syncPeerAddr = regs[0].PeerAddr
 	}
+
+	// Step 1: Update peerServices map (store Peer B's complete service list and connection info)
+	peerSvc, exists := s.peerServices[peerIP]
+	if !exists {
+		peerSvc = &types.PeerServices{
+			PeerIP:   peerIP,
+			Services: make(map[string]*types.ServiceInfo),
+			LastSync: time.Now().Unix(),
+		}
+		s.peerServices[peerIP] = peerSvc
+	}
+	// Update peer connection information (PeerID, PeerAddr, Conn)
+	// This allows us to find peer's bind address when receiving FORWARD requests
+	peerSvc.PeerID = syncPeerID
+	peerSvc.PeerAddr = syncPeerAddr
+	peerSvc.Conn = peerConn // Store the control connection for this peer
+
+	// Update services map in peerServices (complete replacement)
+	peerSvc.Services = make(map[string]*types.ServiceInfo)
+	for _, reg := range regs {
+		name := strings.TrimSpace(reg.Name)
+		backend := strings.TrimSpace(reg.Backend)
+		if name == "" || backend == "" {
+			continue
+		}
+		peerSvc.Services[name] = &types.ServiceInfo{
+			Name:        name,
+			BackendAddr: backend,
+			SourcePeer:  peerIP,
+		}
+	}
+	peerSvc.LastSync = time.Now().Unix()
+
+	// Step 2: Also register to services map (for routing lookup)
+	// This allows the service to be found during routing
 	for _, reg := range regs {
 		name := strings.TrimSpace(reg.Name)
 		backend := strings.TrimSpace(reg.Backend)
@@ -638,9 +638,6 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 		return ""
 	}
 
-	s.clientsLock.RLock()
-	defer s.clientsLock.RUnlock()
-
 	connRemote := "unknown"
 	if conn.RemoteAddr() != nil {
 		connRemote = conn.RemoteAddr().String()
@@ -700,7 +697,18 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 			}
 			if remoteIP != "" {
 				logging.Logf("[server] findPeerAddrByConn: trying fallback by IP=%s", remoteIP)
-				// Try to find any service from this peer IP (not local services, as they don't have PeerAddr)
+				
+				// First try: find from peerServices map by IP (most reliable)
+				// peerServices map now stores PeerAddr directly, so we can use it
+				if peerSvc, exists := s.peerServices[remoteIP]; exists && peerSvc != nil {
+					if peerSvc.PeerAddr != "" {
+						logging.Logf("[server] findPeerAddrByConn: FOUND from peerServices by IP=%s peer_addr=%s peer_id=%s", 
+							remoteIP, peerSvc.PeerAddr, peerSvc.PeerID)
+						return peerSvc.PeerAddr
+					}
+				}
+				
+				// Second try: find any service from this peer IP (not local services, as they don't have PeerAddr)
 				// This helps when the requested service is local (ip=local) but we need the peer's bind address
 				// The peer that sent FORWARD should have registered other services via SYNC, which have PeerAddr
 				for key, client := range s.services {

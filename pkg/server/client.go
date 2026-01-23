@@ -57,7 +57,18 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		connMu = &sync.Mutex{}
 	}
 
-	connected := ip == "local" || conn != nil
+	// Check if connection is actually valid
+	connected := ip == "local"
+	if conn != nil {
+		// Verify connection is still valid by checking remote address
+		// If RemoteAddr() returns nil, connection is closed
+		if conn.RemoteAddr() != nil {
+			connected = true
+		} else {
+			connected = false
+			logging.Logf("[registry] connection is closed for name=%q ip=%s peer_id=%q", name, ip, peerID)
+		}
+	}
 	// Set PeerID: use provided peerID if available, otherwise fall back to defaults
 	if peerID == "" {
 		// Set PeerID: for local services, use current peer_id; for remote services, use IP as fallback
@@ -85,7 +96,7 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		// If so, we should update in place rather than remove
 		if existingClient.Conn == conn && conn != nil {
 			// Same connection, check if peer_id and other key info are the same
-			// If peer_id is the same and other info hasn't changed, skip update
+			// If peer_id is the same and other info hasn't changed, still update LastSeen and Connected
 			existingPeerID := existingClient.PeerID
 			if existingPeerID == "" {
 				existingPeerID = existingClient.IP
@@ -95,13 +106,17 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 				newPeerID = ip
 			}
 
-			// If peer_id is the same and backend/peerAddr haven't changed, skip update
+			// If peer_id is the same and backend/peerAddr haven't changed, just update LastSeen and Connected
+			// This ensures connection state is kept fresh on heartbeat
 			if existingPeerID == newPeerID &&
 				existingClient.BackendAddr == backendAddr &&
 				existingClient.PeerAddr == peerAddr {
-				logging.Logf("[registry] skipping update - service unchanged name=%q peer_id=%q backend=%q",
-					name, existingPeerID, backendAddr)
-				return // Skip update if nothing changed
+				// Update LastSeen and Connected to keep connection state fresh
+				existingClient.LastSeen = time.Now()
+				existingClient.Connected = connected
+				logging.Logf("[registry] heartbeat update - service unchanged name=%q peer_id=%q backend=%q connected=%t",
+					name, existingPeerID, backendAddr, connected)
+				return // Skip full update if nothing changed
 			}
 
 			// Same connection but info changed, update in place

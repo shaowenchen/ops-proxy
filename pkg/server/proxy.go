@@ -835,9 +835,11 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		logging.Logf("[request][debug] FORWARD command sent (proxy_id=%s client=%s name=%s backend=%s)", proxyID, remote, name, backendAddr)
 	}
 
-	// Wait for DATA on control connection (not a new connection)
+	// Wait for DATA on control connection (peer-to-peer: long connection)
+	// For peer-to-peer communication, data is transmitted over the existing control connection
 	// The receiving peer will send DATA:<proxy-id> on the control connection,
 	// which will be detected by the control connection reader and passed to us via channel
+	// Note: External client connections (srcConn) are short connections and will be closed after use
 	var dataConn net.Conn
 	dataTimeout := 30 * time.Second  // Default timeout (increased from 5s to 30s)
 	if cfg != nil {

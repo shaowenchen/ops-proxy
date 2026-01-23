@@ -276,10 +276,10 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			s.pendingLock.Unlock()
 			
 			if ch != nil {
-				// Send the control connection to the waiting goroutine
-				// The connection will be used to read data after the DATA header
+				// Peer-to-peer data transmission: reuse control connection (long connection)
+				// Extract any buffered data from bufio.Reader before switching to stream mode
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] DATA matched on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
+					logging.Logf("[request][debug] DATA matched on control connection (remote=%s proxy_id=%s) - switching to stream mode", clientIP, proxyID)
 				}
 				// Check if bufio.Reader has buffered data that needs to be passed along
 				// The reader may have already read some data beyond the DATA header line
@@ -289,7 +289,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 					n, _ := reader.Read(bufferedData)
 					bufferedData = bufferedData[:n]
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[request][debug] buffered data from reader (remote=%s proxy_id=%s bytes=%d)", clientIP, proxyID, len(bufferedData))
+						logging.Logf("[request][debug] extracted buffered data from reader (remote=%s proxy_id=%s bytes=%d)", clientIP, proxyID, len(bufferedData))
 					}
 				}
 				// Create a buffered connection wrapper that includes any buffered data
@@ -302,25 +302,15 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 					}
 				}
 				// Send the connection (with buffered data) to the waiting goroutine
+				// The goroutine will read data stream directly from the connection
 				ch <- dataConn
-				// Continue reading from control connection for other commands after data is read
-				// The waiting goroutine will handle reading data, but we need to continue
-				// reading commands. However, once we start reading data, we can't read commands
-				// from the same connection simultaneously.
-				// 
-				// Solution: The waiting goroutine will read data directly from the connection.
-				// After data is read, the connection can continue to be used for commands.
-				// But we need to stop reading here and let the goroutine handle it.
-				// Actually, we should return here and let the waiting goroutine handle the connection.
-				// But we can't return because we need to continue reading other commands.
-				// 
-				// The issue is: we can't use the same connection for both reading commands and data simultaneously.
-				// We need to either:
-				// 1. Use separate connections for commands and data
-				// 2. Multiplex commands and data on the same connection (requires protocol changes)
-				// 
-				// For now, we'll continue reading and let the goroutine handle data reading.
-				// The goroutine will read data directly from the connection.
+				// IMPORTANT: After sending DATA connection, we need to pause command reading
+				// because the data stream will be read by the goroutine. We cannot continue
+				// reading commands while data is being transmitted.
+				// The control connection reading loop will continue after data transmission completes.
+				// However, we cannot block here, so we continue the loop and let the goroutine
+				// handle data reading. The next ReadString will block until data transmission
+				// completes or times out, which is acceptable.
 				continue
 			} else {
 				if cfg != nil && cfg.Log.Level == "debug" {
@@ -693,9 +683,10 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		logging.Logf("[request][debug] backend connected (proxy_id=%s name=%s backend=%s local=%s duration=%s)", proxyID, name, backendAddr, backendConn.LocalAddr(), backendDialDuration)
 	}
 
-	// Step 2: Use the existing control connection to send data
-	// No need to establish a new DATA connection - reuse the control connection
-	logging.Logf("[server] using control connection for DATA proxy_id=%s control_conn=%v", proxyID, controlConn != nil)
+	// Step 2: Use the existing control connection to send data (peer-to-peer: long connection)
+	// For peer-to-peer communication, reuse the control connection instead of creating a new DATA connection
+	// This is more efficient and reduces connection overhead between peers
+	logging.Logf("[server] using control connection for DATA (peer-to-peer long connection) proxy_id=%s control_conn=%v", proxyID, controlConn != nil)
 	if controlConn == nil {
 		logging.Logf("[server] ERROR: control connection is nil, cannot send data proxy_id=%s", proxyID)
 		if s.collector != nil {

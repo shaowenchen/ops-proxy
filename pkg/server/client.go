@@ -68,6 +68,52 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 			peerID = logging.GetPeerID()
 		}
 	}
+	
+	// Determine the identifier to use for serviceKey: prefer peerID over IP
+	// This ensures services are identified by peer_id (e.g., ops-proxy-xxx) rather than IP (e.g., 120.92.88.191)
+	serviceIdentifier := peerID
+	if serviceIdentifier == "" {
+		serviceIdentifier = ip
+	}
+	
+	// Remove all existing services with the same name to ensure name uniqueness
+	// This ensures that if multiple peers register the same service name, only the latest one is kept
+	// First, collect all keys to delete (to avoid modifying map during iteration)
+	keysToDelete := make([]string, 0)
+	if existingClient, exists := s.clients[name]; exists {
+		// Remove from services map using the old identifier (prefer PeerID over IP)
+		oldIdentifier := existingClient.PeerID
+		if oldIdentifier == "" {
+			oldIdentifier = existingClient.IP
+		}
+		oldKey := serviceKey(name, oldIdentifier)
+		keysToDelete = append(keysToDelete, oldKey)
+		logging.Logf("[registry] removing old service with same name name=%q old_ip=%s old_peer_id=%q", 
+			name, existingClient.IP, existingClient.PeerID)
+	}
+	// Also collect any other entries in services map with the same name (from other IPs/peerIDs)
+	for key, svc := range s.services {
+		if svc != nil && svc.Name == name {
+			// Avoid duplicate keys
+			found := false
+			for _, k := range keysToDelete {
+				if k == key {
+					found = true
+					break
+				}
+			}
+			if !found {
+				keysToDelete = append(keysToDelete, key)
+				logging.Logf("[registry] removing duplicate service name=%q old_key=%s old_ip=%s old_peer_id=%q", 
+					name, key, svc.IP, svc.PeerID)
+			}
+		}
+	}
+	// Delete all collected keys
+	for _, key := range keysToDelete {
+		delete(s.services, key)
+	}
+
 	info := &types.ClientInfo{
 		Name:        name,
 		IP:          ip,
@@ -82,9 +128,11 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 		PeerAddr:    peerAddr,
 	}
 	// Use name as key so we can route to the corresponding backend by name
+	// This ensures name uniqueness: if multiple peers register the same name, only the latest one is kept
 	s.clients[name] = info
-	// Keep full list keyed by name+source to show duplicates from different peers
-	s.services[serviceKey(name, ip)] = info
+	// Keep full list keyed by name+identifier (prefer peerID over IP for better identification)
+	// This ensures services are identified by peer_id (e.g., ops-proxy-xxx) rather than IP (e.g., 120.92.88.191)
+	s.services[serviceKey(name, serviceIdentifier)] = info
 
 	connInfo := "nil"
 	if conn != nil {

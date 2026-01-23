@@ -272,7 +272,12 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 					// Fallback to connection's remote address (might be gateway)
 					if conn != nil && conn.RemoteAddr() != nil {
 						sourcePeerAddr = conn.RemoteAddr().String()
+						logging.Logf("[server] WARNING: using conn.RemoteAddr() as fallback for peer_addr: %s (this might be incorrect if peer uses different bind address)", sourcePeerAddr)
+					} else {
+						logging.Logf("[server] ERROR: cannot determine peer_addr for FORWARD request (conn is nil or has no RemoteAddr)")
 					}
+				} else {
+					logging.Logf("[server] found peer_addr=%s from registered services", sourcePeerAddr)
 				}
 				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_addr=%s", proxyID, name, backendAddr, sourcePeerAddr)
 				if cfg != nil && cfg.Log.Level == "debug" {
@@ -321,6 +326,11 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	var syncPeerID string
 	if len(regs) > 0 {
 		syncPeerID = regs[0].PeerID
+		if syncPeerID == "" {
+			logging.Logf("[registry] WARNING: syncPeerID is empty, will use IP as fallback (remote_peer_addr=%s)", peerIP)
+		}
+	} else {
+		logging.Logf("[registry] WARNING: no registrations in SYNC, cannot extract peer_id (remote_peer_addr=%s)", peerIP)
 	}
 	
 	logging.Logf("[registry] processing SYNC (peer_id=%s remote_peer_addr=%s count=%d conn=%v conn_info=%s)", 
@@ -669,6 +679,38 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 				return client.PeerAddr
 			} else {
 				logging.Logf("[server] WARNING: peer_addr is EMPTY for key=%s (peer_id=%s), this will cause DATA connection to fail", key, client.PeerID)
+			}
+		}
+	}
+	
+	// Fallback: try to find by connection's remote IP address
+	// This handles cases where the connection might not match exactly (e.g., reconnection)
+	if conn != nil {
+		remoteAddr := conn.RemoteAddr()
+		if remoteAddr != nil {
+			remoteIP := ""
+			if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
+				remoteIP = tcpAddr.IP.String()
+			} else {
+				// Extract IP from address string (format: "ip:port")
+				addrStr := remoteAddr.String()
+				if idx := strings.LastIndex(addrStr, ":"); idx > 0 {
+					remoteIP = addrStr[:idx]
+				}
+			}
+			if remoteIP != "" {
+				logging.Logf("[server] findPeerAddrByConn: trying fallback by IP=%s", remoteIP)
+				for key, client := range s.services {
+					if client == nil {
+						continue
+					}
+					// Check if IP matches (for remote services, IP is the peer's IP)
+					if client.IP == remoteIP && client.IP != "local" && client.PeerAddr != "" {
+						logging.Logf("[server] findPeerAddrByConn: FOUND by IP key=%s peer_id=%s peer_addr=%s ip=%s", 
+							key, client.PeerID, client.PeerAddr, client.IP)
+						return client.PeerAddr
+					}
+				}
 			}
 		}
 	}

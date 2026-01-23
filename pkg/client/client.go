@@ -23,6 +23,7 @@ import (
 // proxyServer is optional; if provided, SYNC commands will register services to it
 func Run(cfg *config.Config, serverAddr, clientName, backendAddr string, proxyServer interface {
 	RegisterClientByName(name, ip, backendAddr string, conn net.Conn)
+	RegisterClientByNameWithPeerInfo(name, ip, backendAddr string, conn net.Conn, peerID, peerAddr string)
 	LogServicesTable()
 }) error {
 	// Get peer addresses and service addresses from config
@@ -444,19 +445,28 @@ func handleConnectionWithReader(conn net.Conn, reader *bufio.Reader, serverAddre
 						serverIP = tcpAddr.IP.String()
 					}
 				}
-				logging.Logf("[registry] received SYNC from %s (count=%d conn=%v)", serverIP, len(regs), conn != nil)
+				// Extract peer_id and peer_addr from first registration (all should have the same)
+				var syncPeerID, syncPeerAddr string
+				if len(regs) > 0 {
+					syncPeerID = regs[0].PeerID
+					syncPeerAddr = regs[0].PeerAddr
+				}
+				logging.Logf("[registry] received SYNC from %s (peer_id=%s peer_addr=%s count=%d conn=%v)", 
+					serverIP, syncPeerID, syncPeerAddr, len(regs), conn != nil)
 				for _, reg := range regs {
 					if strings.TrimSpace(reg.Name) == "" || strings.TrimSpace(reg.Backend) == "" {
 						continue
 					}
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[debug] sync service name=%s backend=%s from=%s", reg.Name, reg.Backend, serverIP)
+						logging.Logf("[debug] sync service name=%s backend=%s peer_id=%s from=%s", 
+							reg.Name, reg.Backend, syncPeerID, serverIP)
 					}
+					// Use RegisterClientByNameWithPeerInfo to preserve peer_id (e.g., ops-proxy-xxx) instead of IP (e.g., 120.92.88.191)
 					// Pass the actual connection so services can be forwarded
-					proxyServer.RegisterClientByName(reg.Name, serverIP, reg.Backend, conn)
+					proxyServer.RegisterClientByNameWithPeerInfo(reg.Name, serverIP, reg.Backend, conn, syncPeerID, syncPeerAddr)
 				}
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[debug] synced %d service(s) from peer %s", len(regs), serverIP)
+					logging.Logf("[debug] synced %d service(s) from peer %s (peer_id=%s)", len(regs), serverIP, syncPeerID)
 				}
 				// Print service table after sync
 				proxyServer.LogServicesTable()

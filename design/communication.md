@@ -87,6 +87,7 @@ Peer 只进行两种转发:
 ```
 
 - Peer A 收到 test-cluster-c.example.com:80 的请求
+
 ```
 1. Peer A 收到 test-cluster-c.example.com:80 的请求
 2. 根据 Host/SNI 提取域名，在 services map 中查找服务，发现是其他 Peer C 的服务

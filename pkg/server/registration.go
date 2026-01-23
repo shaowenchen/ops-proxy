@@ -279,14 +279,47 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 					}
 				}
 
-				// If service is local, we still need to find the peer that sent FORWARD
-				// to establish DATA connection back
+				// Find the peer that sent FORWARD to establish DATA connection back
+				// This is critical: we need the peer's bind address (PeerAddr), not the control connection address
 				sourcePeerAddr := s.findPeerAddrByConn(conn)
 				if sourcePeerAddr == "" {
-					// Fallback to connection's remote address (might be gateway)
+					// If findPeerAddrByConn failed, try to find by connection's remote IP
+					// This handles cases where the peer hasn't sent SYNC yet, or the connection doesn't match
 					if conn != nil && conn.RemoteAddr() != nil {
-						sourcePeerAddr = conn.RemoteAddr().String()
-						logging.Logf("[server] WARNING: using conn.RemoteAddr() as fallback for peer_addr: %s (this might be incorrect if peer uses different bind address)", sourcePeerAddr)
+						remoteAddr := conn.RemoteAddr()
+						remoteIP := ""
+						if tcpAddr, ok := remoteAddr.(*net.TCPAddr); ok {
+							remoteIP = tcpAddr.IP.String()
+						} else {
+							addrStr := remoteAddr.String()
+							if idx := strings.LastIndex(addrStr, ":"); idx > 0 {
+								remoteIP = addrStr[:idx]
+							}
+						}
+
+						// Try to find peer address from peerServices map by IP
+						if remoteIP != "" {
+							if peerSvc, exists := s.peerServices[remoteIP]; exists && peerSvc != nil && peerSvc.PeerAddr != "" {
+								sourcePeerAddr = peerSvc.PeerAddr
+								logging.Logf("[server] found peer_addr=%s from peerServices by IP=%s", sourcePeerAddr, remoteIP)
+							} else {
+								// Try to find any service from this peer IP that has PeerAddr
+								for key, client := range s.services {
+									if client != nil && client.IP == remoteIP && client.IP != "local" && client.PeerAddr != "" {
+										sourcePeerAddr = client.PeerAddr
+										logging.Logf("[server] found peer_addr=%s from services by IP=%s key=%s", sourcePeerAddr, remoteIP, key)
+										break
+									}
+								}
+							}
+						}
+
+						// Last resort: use connection's remote address as fallback
+						// This might work if peer's bind address is the same as control connection address
+						if sourcePeerAddr == "" {
+							sourcePeerAddr = conn.RemoteAddr().String()
+							logging.Logf("[server] WARNING: using conn.RemoteAddr() as fallback for peer_addr: %s (this might be incorrect if peer uses different bind address)", sourcePeerAddr)
+						}
 					} else {
 						logging.Logf("[server] ERROR: cannot determine peer_addr for FORWARD request (conn is nil or has no RemoteAddr)")
 					}

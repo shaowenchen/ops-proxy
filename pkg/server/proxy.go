@@ -744,10 +744,14 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	ch := make(chan net.Conn, 1)
 	s.pendingLock.Lock()
 	s.pendingData[proxyID] = ch
+	pendingCount := len(s.pendingData)
 	if s.collector != nil {
-		s.collector.SetPendingDataConnections(len(s.pendingData))
+		s.collector.SetPendingDataConnections(pendingCount)
 	}
 	s.pendingLock.Unlock()
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] created pending DATA channel (proxy_id=%s name=%s pending_count=%d)", proxyID, name, pendingCount)
+	}
 
 	cleanupPending := func() {
 		s.pendingLock.Lock()
@@ -837,6 +841,9 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	if cfg != nil {
 		dataTimeout = cfg.GetConnectionTimeout()
 	}
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] waiting for DATA connection (proxy_id=%s name=%s timeout=%s)", proxyID, name, dataTimeout)
+	}
 	select {
 	case dataConn = <-ch:
 		peer := ""
@@ -868,6 +875,9 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	defer dataConn.Close()
 
 	logging.Logf("[tunnel] bridge start name=%s proxy_id=%s", name, proxyID)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] starting data bridge (remote=%s name=%s proxy_id=%s)", remote, name, proxyID)
+	}
 
 	var bytesTx, bytesRx int64
 	errCh := make(chan error, 2)
@@ -905,6 +915,9 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	err = err1
 	if err == nil || err == io.EOF {
 		err = err2
+	}
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] bridge completed (remote=%s name=%s proxy_id=%s bytes_tx=%d bytes_rx=%d err1=%v err2=%v)", remote, name, proxyID, bytesTx, bytesRx, err1, err2)
 	}
 
 	success := err == nil || err == io.EOF

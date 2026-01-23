@@ -263,8 +263,14 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		// When Peer B sends FORWARD to Peer A, Peer A receives it here on the control connection
 		// Peer A should then connect to local backend and establish DATA connection back to Peer B
 		if strings.HasPrefix(line, protocol.CmdForward+":") {
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[request][debug] received FORWARD command (remote=%s line=%q)", clientIP, strings.TrimSpace(line))
+			}
 			proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line)
 			if ok {
+				if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[request][debug] FORWARD command parsed (remote=%s proxy_id=%s name=%s backend=%s)", clientIP, proxyID, name, backendAddr)
+				}
 				// Check if this service is a local service first
 				// If it's local, we should forward directly to the backend
 				// and establish DATA connection back to the requesting peer
@@ -574,20 +580,36 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 // We use this connection to find the peer and establish DATA connection
 func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
 	logging.Logf("[server] handling FORWARD proxy_id=%s name=%s backend=%s from_addr=%s control_conn=%v", proxyID, name, backendAddr, peerAddr, controlConn != nil)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		controlRemote := ""
+		if controlConn != nil && controlConn.RemoteAddr() != nil {
+			controlRemote = controlConn.RemoteAddr().String()
+		}
+		logging.Logf("[request][debug] FORWARD request received (proxy_id=%s name=%s backend=%s from_addr=%s control_remote=%s)", proxyID, name, backendAddr, peerAddr, controlRemote)
+	}
 
 	dialTimeout := 5 * time.Second
 	if cfg != nil {
 		dialTimeout = cfg.GetDialTimeout()
 	}
 	logging.Logf("[server] handleForwardRequest: dialTimeout=%s proxy_id=%s cfg=%v", dialTimeout, proxyID, cfg != nil)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] FORWARD handler started (proxy_id=%s name=%s backend=%s dial_timeout=%s)", proxyID, name, backendAddr, dialTimeout)
+	}
 
 	// Step 1: Connect to local backend
 	logging.Logf("[server] connecting to backend proxy_id=%s backend=%s timeout=%s", proxyID, backendAddr, dialTimeout)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] dialing backend (proxy_id=%s name=%s backend=%s timeout=%s)", proxyID, name, backendAddr, dialTimeout)
+	}
 	startBackendDial := time.Now()
 	backendConn, err := net.DialTimeout("tcp", backendAddr, dialTimeout)
 	backendDialDuration := time.Since(startBackendDial)
 	if err != nil {
 		logging.Logf("[server] backend dial failed proxy_id=%s backend=%s err=%v duration=%s", proxyID, backendAddr, err, backendDialDuration)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[request][debug] backend dial failed (proxy_id=%s name=%s backend=%s err=%v duration=%s)", proxyID, name, backendAddr, err, backendDialDuration)
+		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "backend_dial_error")
 		}
@@ -595,6 +617,9 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	}
 	defer backendConn.Close()
 	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s duration=%s", proxyID, backendAddr, backendConn.LocalAddr(), backendDialDuration)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] backend connected (proxy_id=%s name=%s backend=%s local=%s duration=%s)", proxyID, name, backendAddr, backendConn.LocalAddr(), backendDialDuration)
+	}
 
 	// Step 2: Establish DATA connection back to requesting peer
 	// Use the control connection's remote address to establish DATA connection
@@ -619,6 +644,9 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	// This assumes the peer listens for DATA connections on the same address as control connection
 	dataTargetAddr := controlConn.RemoteAddr().String()
 	logging.Logf("[server] connecting DATA channel proxy_id=%s target_addr=%s timeout=%s (using control connection's remote address)", proxyID, dataTargetAddr, dialTimeout)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] dialing DATA channel (proxy_id=%s name=%s target_addr=%s timeout=%s)", proxyID, name, dataTargetAddr, dialTimeout)
+	}
 
 	// Attempt to dial DATA connection using control connection's remote address
 	startDial := time.Now()
@@ -626,6 +654,9 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	dialDuration := time.Since(startDial)
 	if err != nil {
 		logging.Logf("[server] DATA dial failed proxy_id=%s target_addr=%s err=%v duration=%s", proxyID, dataTargetAddr, err, dialDuration)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[request][debug] DATA dial failed (proxy_id=%s name=%s target_addr=%s err=%v duration=%s)", proxyID, name, dataTargetAddr, err, dialDuration)
+		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}
@@ -634,10 +665,20 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	logging.Logf("[server] DATA dial succeeded proxy_id=%s target_addr=%s duration=%s", proxyID, dataTargetAddr, dialDuration)
 	defer dataConn.Close()
 	logging.Logf("[server] DATA channel connected proxy_id=%s target_addr=%s local=%s remote=%s", proxyID, dataTargetAddr, dataConn.LocalAddr(), dataConn.RemoteAddr())
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] DATA dial succeeded (proxy_id=%s name=%s target_addr=%s local=%s remote=%s duration=%s)", proxyID, name, dataTargetAddr, dataConn.LocalAddr(), dataConn.RemoteAddr(), dialDuration)
+	}
 
 	// Step 3: Send DATA header to identify this connection
-	if _, err := dataConn.Write([]byte(protocol.FormatData(proxyID))); err != nil {
+	dataHeader := protocol.FormatData(proxyID)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] sending DATA header (proxy_id=%s name=%s header=%q)", proxyID, name, strings.TrimSpace(dataHeader))
+	}
+	if _, err := dataConn.Write([]byte(dataHeader)); err != nil {
 		logging.Logf("[server] DATA header send failed proxy_id=%s err=%v", proxyID, err)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[request][debug] DATA header send failed (proxy_id=%s name=%s err=%v)", proxyID, name, err)
+		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_header_error")
 		}
@@ -645,10 +686,14 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	}
 	logging.Logf("[server] DATA channel established proxy_id=%s", proxyID)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] DATA channel connected (proxy_id=%s local=%s remote=%s)", proxyID, dataConn.LocalAddr(), dataConn.RemoteAddr())
+		logging.Logf("[request][debug] DATA header sent (proxy_id=%s name=%s)", proxyID, name)
+		logging.Logf("[request][debug] DATA channel established (proxy_id=%s name=%s local=%s remote=%s)", proxyID, name, dataConn.LocalAddr(), dataConn.RemoteAddr())
 	}
 
 	logging.Logf("[server] bridge start proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] starting data bridge (proxy_id=%s name=%s backend=%s)", proxyID, name, backendAddr)
+	}
 
 	// Step 4: Bridge data in both directions
 	var bytesToPeer, bytesToBackend int64
@@ -685,6 +730,9 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	err2 := <-errCh
 
 	logging.Logf("[server] bridge done proxy_id=%s name=%s bytes_to_peer=%d bytes_to_backend=%d", proxyID, name, bytesToPeer, bytesToBackend)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[request][debug] bridge completed (proxy_id=%s name=%s bytes_to_peer=%d bytes_to_backend=%d err1=%v err2=%v)", proxyID, name, bytesToPeer, bytesToBackend, err1, err2)
+	}
 
 	// Return first non-nil error
 	if err1 != nil && err1 != io.EOF {

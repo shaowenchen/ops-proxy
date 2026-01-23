@@ -370,9 +370,8 @@ func (s *ProxyServer) UnregisterClientsByConn(conn net.Conn) {
 // servicesTableLines returns a stable table snapshot of current services map on this peer.
 // Prints the full map structure with all entries.
 func (s *ProxyServer) servicesTableLines() []string {
-
 	if len(s.services) == 0 {
-		return []string{"svc_map={}"}
+		return []string{"services=[]"}
 	}
 
 	type svcEntry struct {
@@ -407,17 +406,19 @@ func (s *ProxyServer) servicesTableLines() []string {
 	// Sort by key for consistent output
 	sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
 
-	lines := make([]string, 0, len(entries)+4)
-	lines = append(lines, fmt.Sprintf("svc_map={total=%d}", len(entries)))
-	lines = append(lines, "  | peer | name | backend |")
-	lines = append(lines, "  | ---- | ---- | ------- |")
+	// Format as services=[name@peer_id,name@peer_id,...] similar to route details
+	serviceItems := make([]string, 0, len(entries))
 	for _, e := range entries {
-		lines = append(lines, fmt.Sprintf("  | %s | %s | %s |", e.peerID, e.name, e.backend))
+		serviceItems = append(serviceItems, fmt.Sprintf("%s@%s", e.name, e.peerID))
 	}
+	// Sort for consistent output
+	sort.Strings(serviceItems)
+	servicesList := strings.Join(serviceItems, ",")
+	lines := []string{fmt.Sprintf("services=[%s]", servicesList)}
 	return lines
 }
 
-// logServicesTable prints the full services table as a single multi-line log entry.
+// logServicesTable prints the full services list in route details format.
 // Only prints in debug mode if cfg is provided.
 func (s *ProxyServer) logServicesTable(cfg *config.Config) {
 	// Only print in debug mode
@@ -429,12 +430,12 @@ func (s *ProxyServer) logServicesTable(cfg *config.Config) {
 	if len(lines) == 0 {
 		return
 	}
-	// Join all lines with newlines to print as a single log entry
-	table := strings.Join(lines, "\n")
-	logging.Logf("[registry] services peer_id=%s\n%s", peerID, table)
+	// Format as single line similar to route details
+	servicesStr := strings.Join(lines, "")
+	logging.Logf("[registry] services peer_id=%s %s", peerID, servicesStr)
 }
 
-// LogServicesTable prints the full services table (public wrapper).
+// LogServicesTable prints the full services list in route details format (public wrapper).
 // Always prints regardless of log level.
 func (s *ProxyServer) LogServicesTable() {
 	peerID := logging.GetPeerID()
@@ -442,9 +443,9 @@ func (s *ProxyServer) LogServicesTable() {
 	if len(lines) == 0 {
 		return
 	}
-	// Join all lines with newlines to print as a single log entry
-	table := strings.Join(lines, "\n")
-	logging.Logf("[registry] services peer_id=%s\n%s", peerID, table)
+	// Format as single line similar to route details
+	servicesStr := strings.Join(lines, "")
+	logging.Logf("[registry] services peer_id=%s %s", peerID, servicesStr)
 }
 
 // logPeerServicesMap prints the full peerServices map structure

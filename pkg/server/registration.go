@@ -12,6 +12,7 @@ import (
 	"github.com/ops-proxy/pkg/config"
 	"github.com/ops-proxy/pkg/logging"
 	"github.com/ops-proxy/pkg/protocol"
+	"github.com/ops-proxy/pkg/proxy"
 	"github.com/ops-proxy/pkg/routing"
 	"github.com/ops-proxy/pkg/types"
 )
@@ -280,9 +281,28 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				if cfg != nil && cfg.Log.Level == "debug" {
 					logging.Logf("[request][debug] DATA matched on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
 				}
-				// Send the control connection to the waiting goroutine
-				// The goroutine will read data from this connection
-				ch <- conn
+				// Check if bufio.Reader has buffered data that needs to be passed along
+				// The reader may have already read some data beyond the DATA header line
+				bufferedData := []byte(nil)
+				if reader.Buffered() > 0 {
+					bufferedData = make([]byte, reader.Buffered())
+					n, _ := reader.Read(bufferedData)
+					bufferedData = bufferedData[:n]
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[request][debug] buffered data from reader (remote=%s proxy_id=%s bytes=%d)", clientIP, proxyID, len(bufferedData))
+					}
+				}
+				// Create a buffered connection wrapper that includes any buffered data
+				// This ensures the waiting goroutine can read all data, including what was buffered
+				var dataConn net.Conn = conn
+				if len(bufferedData) > 0 {
+					dataConn = &proxy.BufferedConn{Conn: conn, Buf: bufferedData, Pos: 0}
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[request][debug] created BufferedConn with buffered data (remote=%s proxy_id=%s bytes=%d)", clientIP, proxyID, len(bufferedData))
+					}
+				}
+				// Send the connection (with buffered data) to the waiting goroutine
+				ch <- dataConn
 				// Continue reading from control connection for other commands after data is read
 				// The waiting goroutine will handle reading data, but we need to continue
 				// reading commands. However, once we start reading data, we can't read commands

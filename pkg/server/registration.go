@@ -279,6 +279,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			if ch != nil {
 				// Peer-to-peer data transmission: reuse control connection (long connection)
 				// Extract any buffered data from bufio.Reader before switching to stream mode
+				logging.Logf("[server] DATA matched on control connection (remote=%s proxy_id=%s) - switching to stream mode", clientIP, proxyID)
 				if cfg != nil && cfg.Log.Level == "debug" {
 					logging.Logf("[request][debug] DATA matched on control connection (remote=%s proxy_id=%s) - switching to stream mode", clientIP, proxyID)
 				}
@@ -314,10 +315,18 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				// completes or times out, which is acceptable.
 				continue
 			} else {
+				logging.Logf("[server] WARNING: DATA line on control connection but no pending forward (remote=%s proxy_id=%s)", clientIP, proxyID)
 				if cfg != nil && cfg.Log.Level == "debug" {
 					logging.Logf("[request][debug] unexpected DATA on control connection (remote=%s proxy_id=%s reason=no_pending_forward)", clientIP, proxyID)
 				}
-				logging.Logf("Unexpected DATA line on control connection for proxy-id=%s (no pending forward)", proxyID)
+				// Log all pending proxy IDs for debugging
+				s.pendingLock.Lock()
+				pendingIDs := make([]string, 0, len(s.pendingData))
+				for id := range s.pendingData {
+					pendingIDs = append(pendingIDs, id)
+				}
+				s.pendingLock.Unlock()
+				logging.Logf("[server] current pending proxy_ids: %v", pendingIDs)
 				continue
 			}
 		}

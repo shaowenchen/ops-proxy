@@ -282,11 +282,19 @@ func (s *ProxyServer) GetClientByPeerID(peerID string) *types.ClientInfo {
 	// First, try to find from peerServices map
 	for peerIP, peerSvc := range s.peerServices {
 		if peerSvc != nil && peerSvc.PeerID == peerID {
-			if peerSvc.Conn != nil && peerSvc.Conn.RemoteAddr() != nil {
+			if peerSvc.Conn != nil {
+				// Check if connection is still valid
+				if peerSvc.Conn.RemoteAddr() == nil {
+					logging.Logf("[GetClientByPeerID] peer connection is closed peer_id=%s peer_ip=%s", peerID, peerIP)
+					continue
+				}
 				// Find any service from this peer to get connection info
 				for _, svc := range peerSvc.Services {
 					if svc != nil {
 						// Create a ClientInfo from peer service
+						// IMPORTANT: This connection is the incoming connection from the peer
+						// (e.g., Peer A connects to Peer B, so from Peer B's perspective, this is an incoming connection)
+						// TCP connections are bidirectional, so Peer B can use this connection to send FORWARD to Peer A
 						client := &types.ClientInfo{
 							Name:        svc.Name,
 							IP:          peerIP,
@@ -297,10 +305,16 @@ func (s *ProxyServer) GetClientByPeerID(peerID string) *types.ClientInfo {
 							Connected:   true,
 							LastSeen:    time.Now(),
 						}
-						logging.Logf("[GetClientByPeerID] found from peerServices peer_id=%s name=%s backend=%s", peerID, svc.Name, svc.BackendAddr)
+						connRemote := ""
+						if peerSvc.Conn.RemoteAddr() != nil {
+							connRemote = peerSvc.Conn.RemoteAddr().String()
+						}
+						logging.Logf("[GetClientByPeerID] found from peerServices peer_id=%s name=%s backend=%s conn_remote=%s", peerID, svc.Name, svc.BackendAddr, connRemote)
 						return client
 					}
 				}
+			} else {
+				logging.Logf("[GetClientByPeerID] peer has no connection peer_id=%s peer_ip=%s", peerID, peerIP)
 			}
 		}
 	}

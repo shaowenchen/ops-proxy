@@ -510,10 +510,16 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 
 	if client.Conn == nil {
-		logging.Logf("[tunnel] Remote client %s (peer_id=%s remote_peer_addr=%s) connection is nil - cannot forward", clientName, client.PeerID, client.IP)
+		logging.Logf("[tunnel] ERROR: Remote client %s (peer_id=%s remote_peer_addr=%s) connection is nil - cannot forward", clientName, client.PeerID, client.IP)
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[request][debug] remote client conn is nil (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
+		// IMPORTANT: For unidirectional connections (Peer A has remote_peer_addr, Peer B doesn't):
+		// - Peer A connects to Peer B (incoming connection from Peer B's perspective)
+		// - Peer B can use this connection to send FORWARD to Peer A (TCP is bidirectional)
+		// - But if client.Conn is nil, it means the connection wasn't stored correctly
+		// This can happen if services were synced via SYNC but the connection wasn't associated
+		logging.Logf("[tunnel] WARNING: Connection is nil for peer_id=%s. This may indicate a unidirectional connection issue.", client.PeerID)
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "remote_conn_nil")
 		}
@@ -841,7 +847,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	// which will be detected by the control connection reader and passed to us via channel
 	// Note: External client connections (srcConn) are short connections and will be closed after use
 	var dataConn net.Conn
-	dataTimeout := 30 * time.Second  // Default timeout (increased from 5s to 30s)
+	dataTimeout := 30 * time.Second // Default timeout (increased from 5s to 30s)
 	if cfg != nil {
 		dataTimeout = cfg.GetConnectionTimeout()
 	}

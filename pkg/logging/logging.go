@@ -67,43 +67,38 @@ func GetPeerID() string {
 	return peerID
 }
 
-// Logf logs a formatted message with peer ID prefix (async, non-blocking)
+// Logf logs a formatted message (async, non-blocking)
 func Logf(format string, v ...interface{}) {
 	initLogWorker()
-	peerID := GetPeerID()
 	msg := fmt.Sprintf(format, v...)
-	logMsg := fmt.Sprintf("[peer=%s] %s", peerID, msg)
 	
 	// Non-blocking send: if channel is full, drop the log message
 	select {
-	case logChan <- logMsg:
+	case logChan <- msg:
 	default:
 		// Channel is full, log directly to avoid blocking (fallback to sync logging)
-		log.Print(logMsg)
+		log.Print(msg)
 	}
 }
 
-// Log logs a message with peer ID prefix (async, non-blocking)
+// Log logs a message (async, non-blocking)
 func Log(v ...interface{}) {
 	initLogWorker()
-	peerID := GetPeerID()
 	msg := fmt.Sprint(v...)
-	logMsg := fmt.Sprintf("[peer=%s] %s", peerID, msg)
 	
 	// Non-blocking send: if channel is full, drop the log message
 	select {
-	case logChan <- logMsg:
+	case logChan <- msg:
 	default:
 		// Channel is full, log directly to avoid blocking (fallback to sync logging)
-		log.Print(logMsg)
+		log.Print(msg)
 	}
 }
 
-// Fatalf logs a fatal error with peer ID prefix and exits (synchronous for fatal errors)
+// Fatalf logs a fatal error and exits (synchronous for fatal errors)
 func Fatalf(format string, v ...interface{}) {
-	peerID := GetPeerID()
 	msg := fmt.Sprintf(format, v...)
-	log.Fatalf("[peer=%s] %s", peerID, msg)
+	log.Fatalf("%s", msg)
 }
 
 // Flush waits for all pending log messages to be written

@@ -114,16 +114,13 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 	}
 
 	processRegister := func(message string) {
-		logging.Logf("[registry] processing registration (remote=%s message=%q)", clientIP, message)
+		logging.Logf("[register] processing registration from %s", clientIP)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] registration request (remote=%s message=%q)", clientIP, message)
+			logging.Logf("[debug] register message=%q", message)
 		}
 		regs, ok := protocol.ParseRegisterLine(message)
 		if !ok {
-			logging.Logf("[registry] invalid registration message (remote=%s message=%q)", clientIP, message)
-			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] invalid registration message (remote=%s message=%q)", clientIP, message)
-			}
+			logging.Logf("[error] invalid registration message from %s: %q", clientIP, message)
 			_, _ = conn.Write([]byte("ERROR:Invalid registration\n"))
 			return
 		}
@@ -136,12 +133,12 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			}
 			items = append(items, fmt.Sprintf("%s->%s", strings.TrimSpace(r.Name), strings.TrimSpace(r.Backend)))
 		}
-		logging.Logf("[registry] registration parsed (remote=%s count=%d items=%s)", clientIP, len(items), strings.Join(items, ","))
+		logging.Logf("[register] parsed %d service(s) from %s: %s", len(items), clientIP, strings.Join(items, ","))
 
 		if cfg != nil && cfg.Log.Level == "debug" {
 			// Also log raw Registration structs
 			for i, r := range regs {
-				logging.Logf("[request][debug] registration[%d]: Name=%q Backend=%q PeerID=%q PeerAddr=%q",
+				logging.Logf("[debug] registration[%d]: name=%q backend=%q peer_id=%q peer_addr=%q",
 					i, r.Name, r.Backend, r.PeerID, r.PeerAddr)
 			}
 		}
@@ -153,7 +150,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			peerAddr = regs[0].PeerAddr
 		}
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] extracted from REGISTER: peer_id=%q peer_addr=%q", peerID, peerAddr)
+			logging.Logf("[debug] extracted peer_id=%q peer_addr=%q", peerID, peerAddr)
 		}
 		for _, reg := range regs {
 			clientName := strings.TrimSpace(reg.Name)
@@ -163,39 +160,35 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			}
 			// Design requirement: if backend is empty, don't register (no default value)
 			if backendAddr == "" {
-				logging.Logf("[registry] skipping service with empty backend (remote=%s name=%q)", clientIP, clientName)
+				logging.Logf("[register] skipping service %q from %s: empty backend", clientName, clientIP)
 				continue
 			}
 			// Normalize backend address (will return empty if invalid format)
 			originalBackend := backendAddr
 			backendAddr = routing.NormalizeBackendAddr(backendAddr, "localhost")
 			if backendAddr == "" {
-				logging.Logf("[registry] ERROR: skipping service with invalid backend format (remote=%s name=%q original_backend=%q)", clientIP, clientName, originalBackend)
+				logging.Logf("[error] skipping service %q from %s: invalid backend format %q", clientName, clientIP, originalBackend)
 				continue
 			}
 			// Log if backend changed during normalization
 			if backendAddr != originalBackend && cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] backend normalized (name=%q original=%q normalized=%q)", clientName, originalBackend, backendAddr)
+				logging.Logf("[debug] backend normalized: %q -> %q", originalBackend, backendAddr)
 			}
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] registering service (remote=%s name=%q backend=%q peer_id=%q peer_addr=%q)", clientIP, clientName, backendAddr, peerID, peerAddr)
+				logging.Logf("[debug] registering service name=%q backend=%q peer_id=%q peer_addr=%q", clientName, backendAddr, peerID, peerAddr)
 			}
 			s.RegisterClientByNameWithPeerInfo(clientName, clientIP, backendAddr, conn, peerID, peerAddr)
 			registeredCount++
 		}
 		if registeredCount > 0 {
-			logging.Logf("[registry] registration success (remote=%s count=%d)", clientIP, registeredCount)
-			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] registration success (remote=%s count=%d)", clientIP, registeredCount)
-			}
+			logging.Logf("[register] success: registered %d service(s) from %s", registeredCount, clientIP)
 			s.logServicesTable(cfg)
 			okMsg := fmt.Sprintf("OK:%d\n", registeredCount)
-			logging.Logf("[registry] sending acknowledgment (remote=%s msg=%q)", clientIP, strings.TrimSpace(okMsg))
 			n, err := conn.Write([]byte(okMsg))
 			if err != nil {
-				logging.Logf("[registry] failed to send acknowledgment (remote=%s err=%v)", clientIP, err)
-			} else {
-				logging.Logf("[registry] acknowledgment sent (remote=%s bytes=%d)", clientIP, n)
+				logging.Logf("[error] failed to send OK to %s: %v", clientIP, err)
+			} else if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[debug] sent OK:%d to %s (%d bytes)", registeredCount, clientIP, n)
 			}
 
 			// Send our LOCAL service list to the newly registered peer (bidirectional sync)
@@ -214,21 +207,16 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 					})
 				}
 				syncMsg := protocol.FormatSyncWithPeerID(peerID, peerAddr, regs)
-				logging.Logf("[registry] sending service sync (remote=%s count=%d)", clientIP, len(regs))
-				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] sending service sync (remote=%s count=%d)", clientIP, len(regs))
-				}
+				logging.Logf("[sync] sending %d local service(s) to %s", len(regs), clientIP)
 				syncN, syncErr := conn.Write([]byte(syncMsg))
 				if syncErr != nil {
-					logging.Logf("[registry] failed to send service sync (remote=%s err=%v)", clientIP, syncErr)
-				} else {
-					logging.Logf("[registry] service sync sent (remote=%s bytes=%d)", clientIP, syncN)
+					logging.Logf("[error] failed to send SYNC to %s: %v", clientIP, syncErr)
+				} else if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[debug] sent SYNC to %s (%d bytes)", clientIP, syncN)
 				}
 			}
 		} else {
-			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] registration failed (remote=%s reason=no_valid_registrations)", clientIP)
-			}
+			logging.Logf("[error] registration failed from %s: no valid services", clientIP)
 			_, _ = conn.Write([]byte("ERROR:No valid registrations\n"))
 		}
 	}
@@ -252,7 +240,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] registration connection closed (remote=%s err=%v)", clientIP, err)
+				logging.Logf("[debug] control connection closed from %s: %v", clientIP, err)
 			}
 			return
 		}
@@ -264,9 +252,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		// Check if it's a DATA line (data stream on control connection)
 		// This happens when peer sends data after FORWARD command on the same control connection
 		if proxyID, ok := protocol.ParseDataLine(line); ok {
-			logging.Logf("[server] RECEIVED DATA line on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
+			logging.Logf("[data] received DATA header from %s proxy_id=%s", clientIP, proxyID)
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] DATA line on control connection (remote=%s proxy_id=%s)", clientIP, proxyID)
+				logging.Logf("[debug] DATA line on control connection from %s proxy_id=%s", clientIP, proxyID)
 			}
 			// Find the pending DATA channel for this proxy_id
 			s.pendingLock.Lock()
@@ -279,9 +267,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 			if ch != nil {
 				// Peer-to-peer data transmission: reuse control connection (long connection)
 				// Extract any buffered data from bufio.Reader before switching to stream mode
-				logging.Logf("[server] DATA matched on control connection (remote=%s proxy_id=%s) - switching to stream mode", clientIP, proxyID)
+				logging.Logf("[data] matched proxy_id=%s from %s, switching to stream mode", proxyID, clientIP)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] DATA matched on control connection (remote=%s proxy_id=%s) - switching to stream mode", clientIP, proxyID)
+					logging.Logf("[debug] DATA matched, switching to stream mode proxy_id=%s", proxyID)
 				}
 				// Check if bufio.Reader has buffered data that needs to be passed along
 				// The reader may have already read some data beyond the DATA header line
@@ -291,7 +279,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 					n, _ := reader.Read(bufferedData)
 					bufferedData = bufferedData[:n]
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[request][debug] extracted buffered data from reader (remote=%s proxy_id=%s bytes=%d)", clientIP, proxyID, len(bufferedData))
+						logging.Logf("[debug] extracted %d buffered bytes for proxy_id=%s", len(bufferedData), proxyID)
 					}
 				}
 				// Create a buffered connection wrapper that includes any buffered data
@@ -300,7 +288,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				if len(bufferedData) > 0 {
 					dataConn = &proxy.BufferedConn{Conn: conn, Buf: bufferedData, Pos: 0}
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[request][debug] created BufferedConn with buffered data (remote=%s proxy_id=%s bytes=%d)", clientIP, proxyID, len(bufferedData))
+						logging.Logf("[debug] created BufferedConn with %d bytes for proxy_id=%s", len(bufferedData), proxyID)
 					}
 				}
 				// Send the connection (with buffered data) to the waiting goroutine
@@ -315,18 +303,17 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				// completes or times out, which is acceptable.
 				continue
 			} else {
-				logging.Logf("[server] WARNING: DATA line on control connection but no pending forward (remote=%s proxy_id=%s)", clientIP, proxyID)
+				logging.Logf("[error] unexpected DATA from %s proxy_id=%s: no pending forward", clientIP, proxyID)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] unexpected DATA on control connection (remote=%s proxy_id=%s reason=no_pending_forward)", clientIP, proxyID)
+					// Log all pending proxy IDs for debugging
+					s.pendingLock.Lock()
+					pendingIDs := make([]string, 0, len(s.pendingData))
+					for id := range s.pendingData {
+						pendingIDs = append(pendingIDs, id)
+					}
+					s.pendingLock.Unlock()
+					logging.Logf("[debug] current pending proxy_ids: %v", pendingIDs)
 				}
-				// Log all pending proxy IDs for debugging
-				s.pendingLock.Lock()
-				pendingIDs := make([]string, 0, len(s.pendingData))
-				for id := range s.pendingData {
-					pendingIDs = append(pendingIDs, id)
-				}
-				s.pendingLock.Unlock()
-				logging.Logf("[server] current pending proxy_ids: %v", pendingIDs)
 				continue
 			}
 		}
@@ -335,15 +322,15 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		// When Peer B sends FORWARD to Peer A, Peer A receives it here on the control connection
 		// Peer A should then connect to local backend and establish DATA connection back to Peer B
 		if strings.HasPrefix(line, protocol.CmdForward+":") {
-			logging.Logf("[server] RECEIVED FORWARD command (remote=%s line=%q)", clientIP, strings.TrimSpace(line))
+			logging.Logf("[forward] received FORWARD command from %s", clientIP)
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] received FORWARD command (remote=%s line=%q)", clientIP, strings.TrimSpace(line))
+				logging.Logf("[debug] FORWARD line=%q", strings.TrimSpace(line))
 			}
 			proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line)
 			if ok {
-				logging.Logf("[server] FORWARD command parsed (remote=%s proxy_id=%s name=%s backend=%s)", clientIP, proxyID, name, backendAddr)
+				logging.Logf("[forward] parsed proxy_id=%s name=%s backend=%s from %s", proxyID, name, backendAddr, clientIP)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] FORWARD command parsed (remote=%s proxy_id=%s name=%s backend=%s)", clientIP, proxyID, name, backendAddr)
+					logging.Logf("[debug] FORWARD parsed proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
 				}
 				// Check if this service is a local service first
 				// If it's local, we should forward directly to the backend
@@ -375,7 +362,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				for peerIP, peerSvc := range s.peerServices {
 					if peerSvc != nil && peerSvc.Conn == conn {
 						peerSvcInfo = peerSvc
-						logging.Logf("[server] found peer from peerServices by conn peer_ip=%s peer_id=%s peer_addr=%s", peerIP, peerSvc.PeerID, peerSvc.PeerAddr)
+						if cfg != nil && cfg.Log.Level == "debug" {
+							logging.Logf("[debug] found peer from peerServices peer_ip=%s peer_id=%s peer_addr=%s", peerIP, peerSvc.PeerID, peerSvc.PeerAddr)
+						}
 						break
 					}
 				}
@@ -388,7 +377,9 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 							connRemoteIP := client.IP
 							if peerSvc, exists := s.peerServices[connRemoteIP]; exists && peerSvc != nil {
 								peerSvcInfo = peerSvc
-								logging.Logf("[server] found peer from peerServices by service IP key=%s peer_ip=%s peer_id=%s", key, connRemoteIP, peerSvc.PeerID)
+								if cfg != nil && cfg.Log.Level == "debug" {
+									logging.Logf("[debug] found peer from services key=%s peer_ip=%s peer_id=%s", key, connRemoteIP, peerSvc.PeerID)
+								}
 								break
 							}
 						}
@@ -400,16 +391,18 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				sourcePeerAddr := ""
 				if peerSvcInfo != nil && peerSvcInfo.PeerAddr != "" {
 					sourcePeerAddr = peerSvcInfo.PeerAddr
-					logging.Logf("[server] using peer_addr=%s from peerServices peer_id=%s", sourcePeerAddr, peerSvcInfo.PeerID)
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[debug] using peer_addr=%s from peerServices peer_id=%s", sourcePeerAddr, peerSvcInfo.PeerID)
+					}
 				} else if peerConn != nil && peerConn.RemoteAddr() != nil {
 					// Fallback: use control connection's remote address
 					// This assumes the peer's bind address is the same as control connection address
 					sourcePeerAddr = peerConn.RemoteAddr().String()
-					logging.Logf("[server] WARNING: using control connection address as peer_addr=%s (peer may not have sent SYNC with PeerAddr)", sourcePeerAddr)
+					logging.Logf("[error] using control connection address as peer_addr=%s (peer may not have sent SYNC with PeerAddr)", sourcePeerAddr)
 				}
 
 				if sourcePeerAddr == "" {
-					logging.Logf("[server] ERROR: cannot determine peer connection for FORWARD request proxy_id=%s name=%s", proxyID, name)
+					logging.Logf("[error] cannot determine peer address for FORWARD proxy_id=%s name=%s", proxyID, name)
 					if s.collector != nil {
 						s.collector.RecordProxyError(name, "data_dial_error")
 					}
@@ -420,17 +413,19 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				serviceType := "remote"
 				if serviceClient != nil && serviceClient.IP == "local" {
 					serviceType = "local"
-					logging.Logf("[server] FORWARD for local service name=%s backend=%s - will forward directly to backend", name, backendAddr)
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[debug] FORWARD for local service name=%s backend=%s", name, backendAddr)
+					}
 				}
 
-				logging.Logf("[server] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from_addr=%s service_type=%s", proxyID, name, backendAddr, sourcePeerAddr, serviceType)
+				logging.Logf("[forward] handling proxy_id=%s name=%s backend=%s from=%s type=%s", proxyID, name, backendAddr, sourcePeerAddr, serviceType)
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[request][debug] FORWARD command received (from_addr=%s proxy_id=%s name=%s backend=%s service_type=%s)", sourcePeerAddr, proxyID, name, backendAddr, serviceType)
+					logging.Logf("[debug] FORWARD details proxy_id=%s name=%s backend=%s from=%s type=%s", proxyID, name, backendAddr, sourcePeerAddr, serviceType)
 				}
 
 				// Validate sourcePeerAddr before calling handleForwardRequest
 				if sourcePeerAddr == "" {
-					logging.Logf("[server] ERROR: sourcePeerAddr is empty, cannot handle FORWARD request proxy_id=%s name=%s", proxyID, name)
+					logging.Logf("[error] peer address is empty, cannot handle FORWARD proxy_id=%s name=%s", proxyID, name)
 					if s.collector != nil {
 						s.collector.RecordProxyError(name, "data_dial_error")
 					}
@@ -440,17 +435,19 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				// Handle FORWARD request: connect to backend and establish DATA connection
 				// Run in goroutine to avoid blocking the control connection
 				// Pass the control connection so we can use it to find the peer's connection info
-				logging.Logf("[server] starting handleForwardRequest goroutine proxy_id=%s name=%s peer_addr=%s", proxyID, name, sourcePeerAddr)
+				if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[debug] starting FORWARD handler proxy_id=%s name=%s peer_addr=%s", proxyID, name, sourcePeerAddr)
+				}
 				go func() {
 					defer func() {
 						if r := recover(); r != nil {
-							logging.Logf("[server] panic in handleForwardRequest proxy_id=%s name=%s err=%v", proxyID, name, r)
+							logging.Logf("[error] panic in handleForwardRequest proxy_id=%s name=%s err=%v", proxyID, name, r)
 						}
 					}()
 					s.handleForwardRequestWithConn(conn, sourcePeerAddr, proxyID, name, backendAddr, cfg)
 				}()
 			} else {
-				logging.Logf("[server] invalid FORWARD message (remote=%s message=%q)", clientIP, line)
+				logging.Logf("[error] invalid FORWARD message from %s: %q", clientIP, line)
 			}
 		} else if strings.HasPrefix(line, protocol.CmdSync+":") {
 			// Check if it's a SYNC command (service list from peer)
@@ -459,7 +456,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 				// Pass the connection that sent the SYNC message
 				s.processSync(clientIP, regs, conn, cfg)
 			} else {
-				logging.Logf("[registry] invalid SYNC message (remote=%s message=%q)", clientIP, line)
+				logging.Logf("[error] invalid SYNC message from %s: %q", clientIP, line)
 			}
 		} else {
 			// Regular REGISTER command
@@ -490,14 +487,16 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	if len(regs) > 0 {
 		syncPeerID = regs[0].PeerID
 		if syncPeerID == "" {
-			logging.Logf("[registry] WARNING: syncPeerID is empty, will use IP as fallback (remote_peer_addr=%s)", peerIP)
+			logging.Logf("[sync] warning: peer_id is empty from %s, using IP as fallback", peerIP)
 		}
 	} else {
-		logging.Logf("[registry] WARNING: no registrations in SYNC, cannot extract peer_id (remote_peer_addr=%s)", peerIP)
+		logging.Logf("[sync] warning: no registrations in SYNC from %s, cannot extract peer_id", peerIP)
 	}
 
-	logging.Logf("[registry] processing SYNC (peer_id=%s remote_peer_addr=%s count=%d conn=%v conn_info=%s)",
-		syncPeerID, peerIP, len(regs), conn != nil, connInfo)
+	logging.Logf("[sync] processing SYNC from %s peer_id=%s count=%d", peerIP, syncPeerID, len(regs))
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[debug] SYNC conn=%v conn_info=%s", conn != nil, connInfo)
+	}
 
 	// Use the connection that sent the SYNC message
 	// This is the control connection from the peer
@@ -507,14 +506,19 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	// This handles cases where the connection might have been registered with a different IP
 	// (e.g., when connecting through a load balancer)
 	if peerConn == nil {
-		logging.Logf("[registry] SYNC conn is nil, searching for peer connection (peer_id=%s remote_peer_addr=%s services_count=%d)",
-			syncPeerID, peerIP, len(s.services))
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] SYNC conn is nil, searching for peer connection peer_id=%s peer_ip=%s", syncPeerID, peerIP)
+		}
 		for key, svc := range s.services {
 			if svc != nil && svc.IP == peerIP {
-				logging.Logf("[registry] found service from peer key=%s ip=%s conn=%v connected=%t", key, svc.IP, svc.Conn != nil, svc.Connected)
+				if cfg != nil && cfg.Log.Level == "debug" {
+					logging.Logf("[debug] found service from peer key=%s ip=%s conn=%v connected=%t", key, svc.IP, svc.Conn != nil, svc.Connected)
+				}
 				if svc.Conn != nil && svc.Connected {
 					peerConn = svc.Conn
-					logging.Logf("[registry] using existing connection for peer_id=%s remote_peer_addr=%s", syncPeerID, peerIP)
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[debug] using existing connection for peer_id=%s peer_ip=%s", syncPeerID, peerIP)
+					}
 					break
 				}
 			}
@@ -532,10 +536,14 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 		}
 
 		if connRemoteIP != "" && connRemoteIP != peerIP {
-			logging.Logf("[registry] trying to find connection by remote IP (peerIP=%s connRemoteIP=%s)", peerIP, connRemoteIP)
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[debug] trying to find connection by remote IP peerIP=%s connRemoteIP=%s", peerIP, connRemoteIP)
+			}
 			for key, svc := range s.services {
 				if svc != nil && svc.Conn == conn {
-					logging.Logf("[registry] found connection match key=%s ip=%s conn=%v", key, svc.IP, svc.Conn != nil)
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[debug] found connection match key=%s ip=%s", key, svc.IP)
+					}
 					peerConn = conn
 					break
 				}
@@ -544,9 +552,10 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	}
 
 	if peerConn == nil {
-		logging.Logf("[registry] ERROR: no connection available for peer_id=%s remote_peer_addr=%s, services will be registered but cannot be forwarded",
-			syncPeerID, peerIP)
-		logging.Logf("[registry] DEBUG: conn parameter was %v, peerIP=%s", conn != nil, peerIP)
+		logging.Logf("[error] no connection available for SYNC from %s peer_id=%s, services will be registered but cannot be forwarded", peerIP, syncPeerID)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] conn parameter was %v, peerIP=%s", conn != nil, peerIP)
+		}
 		if conn != nil {
 			remoteAddr := ""
 			if conn.RemoteAddr() != nil {
@@ -585,8 +594,9 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	// If connection changed, update it (old connection should be closed by peer)
 	if peerSvc.Conn != peerConn {
 		if peerSvc.Conn != nil && peerConn != nil {
-			logging.Logf("[registry] peer connection changed (peer_id=%s remote_peer_addr=%s old_conn=%v new_conn=%v)",
-				syncPeerID, peerIP, peerSvc.Conn != nil, peerConn != nil)
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[debug] peer connection changed peer_id=%s peer_ip=%s", syncPeerID, peerIP)
+			}
 		}
 		peerSvc.Conn = peerConn
 	}
@@ -607,7 +617,9 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 			}
 		}
 		if connRemoteIP != "" && connRemoteIP != peerIP {
-			logging.Logf("[registry] also storing peerServices by conn RemoteAddr IP=%s (peerIP=%s)", connRemoteIP, peerIP)
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[debug] storing peerServices by conn RemoteAddr IP=%s (peerIP=%s)", connRemoteIP, peerIP)
+			}
 			// Store the same peerSvc under both keys for lookup flexibility
 			s.peerServices[connRemoteIP] = peerSvc
 		}
@@ -637,12 +649,14 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 		if name == "" || backend == "" {
 			continue
 		}
-		logging.Logf("[registry] registering synced service name=%q backend=%q peer_id=%q remote_peer_addr=%s peer_addr=%q conn=%v",
-			name, backend, syncPeerID, peerIP, syncPeerAddr, peerConn != nil)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] registering synced service name=%q backend=%q peer_id=%q peer_ip=%s peer_addr=%q",
+				name, backend, syncPeerID, peerIP, syncPeerAddr)
+		}
 		s.RegisterClientByNameWithPeerInfo(name, peerIP, backend, peerConn, syncPeerID, syncPeerAddr)
 	}
 
-	logging.Logf("[registry] updated peer services (peer_id=%s remote_peer_addr=%s count=%d)", syncPeerID, peerIP, len(peerSvc.Services))
+	logging.Logf("[sync] updated peer services peer_id=%s peer_ip=%s count=%d", syncPeerID, peerIP, len(peerSvc.Services))
 
 	// Step 3: Print full peerServices map structure
 	// Design doc requirement: print complete peerServices map structure
@@ -653,54 +667,46 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 // The control connection (conn) is the established duplex connection between peers
 // We use this connection to find the peer and establish DATA connection
 func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
-	logging.Logf("[server] handling FORWARD proxy_id=%s name=%s backend=%s from_addr=%s control_conn=%v", proxyID, name, backendAddr, peerAddr, controlConn != nil)
+	logging.Logf("[forward] handling proxy_id=%s name=%s backend=%s from=%s", proxyID, name, backendAddr, peerAddr)
 	if cfg != nil && cfg.Log.Level == "debug" {
 		controlRemote := ""
 		if controlConn != nil && controlConn.RemoteAddr() != nil {
 			controlRemote = controlConn.RemoteAddr().String()
 		}
-		logging.Logf("[request][debug] FORWARD request received (proxy_id=%s name=%s backend=%s from_addr=%s control_remote=%s)", proxyID, name, backendAddr, peerAddr, controlRemote)
+		logging.Logf("[debug] FORWARD request control_remote=%s", controlRemote)
 	}
 
 	dialTimeout := 5 * time.Second
 	if cfg != nil {
 		dialTimeout = cfg.GetDialTimeout()
 	}
-	logging.Logf("[server] handleForwardRequest: dialTimeout=%s proxy_id=%s cfg=%v", dialTimeout, proxyID, cfg != nil)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] FORWARD handler started (proxy_id=%s name=%s backend=%s dial_timeout=%s)", proxyID, name, backendAddr, dialTimeout)
+		logging.Logf("[debug] FORWARD handler started proxy_id=%s dial_timeout=%s", proxyID, dialTimeout)
 	}
 
 	// Step 1: Connect to local backend
-	logging.Logf("[server] connecting to backend proxy_id=%s backend=%s timeout=%s", proxyID, backendAddr, dialTimeout)
-	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] dialing backend (proxy_id=%s name=%s backend=%s timeout=%s)", proxyID, name, backendAddr, dialTimeout)
-	}
+	logging.Logf("[forward] connecting to backend proxy_id=%s backend=%s", proxyID, backendAddr)
 	startBackendDial := time.Now()
 	backendConn, err := net.DialTimeout("tcp", backendAddr, dialTimeout)
 	backendDialDuration := time.Since(startBackendDial)
 	if err != nil {
-		logging.Logf("[server] backend dial failed proxy_id=%s backend=%s err=%v duration=%s", proxyID, backendAddr, err, backendDialDuration)
-		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] backend dial failed (proxy_id=%s name=%s backend=%s err=%v duration=%s)", proxyID, name, backendAddr, err, backendDialDuration)
-		}
+		logging.Logf("[error] backend dial failed proxy_id=%s backend=%s err=%v duration=%s", proxyID, backendAddr, err, backendDialDuration)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "backend_dial_error")
 		}
 		return
 	}
 	defer backendConn.Close()
-	logging.Logf("[server] backend connected proxy_id=%s backend=%s local=%s duration=%s", proxyID, backendAddr, backendConn.LocalAddr(), backendDialDuration)
+	logging.Logf("[forward] backend connected proxy_id=%s backend=%s duration=%s", proxyID, backendAddr, backendDialDuration)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] backend connected (proxy_id=%s name=%s backend=%s local=%s duration=%s)", proxyID, name, backendAddr, backendConn.LocalAddr(), backendDialDuration)
+		logging.Logf("[debug] backend connected local=%s", backendConn.LocalAddr())
 	}
 
 	// Step 2: Use the existing control connection to send data (peer-to-peer: long connection)
 	// For peer-to-peer communication, reuse the control connection instead of creating a new DATA connection
 	// This is more efficient and reduces connection overhead between peers
-	logging.Logf("[server] using control connection for DATA (peer-to-peer long connection) proxy_id=%s control_conn=%v", proxyID, controlConn != nil)
 	if controlConn == nil {
-		logging.Logf("[server] ERROR: control connection is nil, cannot send data proxy_id=%s", proxyID)
+		logging.Logf("[error] control connection is nil, cannot send data proxy_id=%s", proxyID)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}
@@ -710,39 +716,28 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	// Send DATA header to identify this data stream on the control connection
 	dataHeader := protocol.FormatData(proxyID)
 	controlConnRemote := ""
-	if controlConn != nil && controlConn.RemoteAddr() != nil {
+	if controlConn.RemoteAddr() != nil {
 		controlConnRemote = controlConn.RemoteAddr().String()
 	}
-	logging.Logf("[server] SENDING DATA header on control connection (proxy_id=%s name=%s header=%q control_remote=%s)",
-		proxyID, name, strings.TrimSpace(dataHeader), controlConnRemote)
+	logging.Logf("[data] sending DATA header proxy_id=%s name=%s to=%s", proxyID, name, controlConnRemote)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] sending DATA header on control connection (proxy_id=%s name=%s header=%q)", proxyID, name, strings.TrimSpace(dataHeader))
+		logging.Logf("[debug] DATA header=%q", strings.TrimSpace(dataHeader))
 	}
 
 	// Send DATA header on control connection to mark the start of data transmission
 	if _, err := controlConn.Write([]byte(dataHeader)); err != nil {
-		logging.Logf("[server] DATA header send failed on control connection proxy_id=%s err=%v", proxyID, err)
-		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA header send failed (proxy_id=%s name=%s err=%v)", proxyID, name, err)
-		}
+		logging.Logf("[error] DATA header send failed proxy_id=%s err=%v", proxyID, err)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_header_error")
 		}
 		return
 	}
-	logging.Logf("[server] DATA header sent on control connection proxy_id=%s", proxyID)
-	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] DATA header sent (proxy_id=%s name=%s)", proxyID, name)
-		logging.Logf("[request][debug] using control connection for data transmission (proxy_id=%s name=%s)", proxyID, name)
-	}
+	logging.Logf("[data] DATA header sent proxy_id=%s", proxyID)
 
 	// Use control connection as data connection
 	dataConn := controlConn
 
-	logging.Logf("[server] bridge start proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
-	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] starting data bridge (proxy_id=%s name=%s backend=%s)", proxyID, name, backendAddr)
-	}
+	logging.Logf("[forward] bridge started proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
 
 	// Step 4: Bridge data in both directions
 	var bytesToPeer, bytesToBackend int64
@@ -752,7 +747,7 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		n, e := io.Copy(dataConn, backendConn) // backend -> peer
 		bytesToPeer = n
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] backend->peer done (proxy_id=%s bytes=%d err=%v)", proxyID, n, e)
+			logging.Logf("[debug] backend->peer done proxy_id=%s bytes=%d err=%v", proxyID, n, e)
 		}
 		// Don't close control connection write side - it's still used for other commands
 		// Only signal EOF by not writing more data
@@ -763,7 +758,7 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		n, e := io.Copy(backendConn, dataConn) // peer -> backend
 		bytesToBackend = n
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] peer->backend done (proxy_id=%s bytes=%d err=%v)", proxyID, n, e)
+			logging.Logf("[debug] peer->backend done proxy_id=%s bytes=%d err=%v", proxyID, n, e)
 		}
 		// Close write side to signal EOF to backend
 		if tcpConn, ok := backendConn.(*net.TCPConn); ok {
@@ -776,28 +771,28 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	err1 := <-errCh
 	err2 := <-errCh
 
-	logging.Logf("[server] bridge done proxy_id=%s name=%s bytes_to_peer=%d bytes_to_backend=%d", proxyID, name, bytesToPeer, bytesToBackend)
+	logging.Logf("[forward] bridge completed proxy_id=%s name=%s bytes_to_peer=%d bytes_to_backend=%d", proxyID, name, bytesToPeer, bytesToBackend)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] bridge completed (proxy_id=%s name=%s bytes_to_peer=%d bytes_to_backend=%d err1=%v err2=%v)", proxyID, name, bytesToPeer, bytesToBackend, err1, err2)
+		logging.Logf("[debug] bridge errors err1=%v err2=%v", err1, err2)
 	}
 
 	// Return first non-nil error
 	if err1 != nil && err1 != io.EOF {
-		logging.Logf("[server] Forward failed proxy_id=%s name=%s err=%v", proxyID, name, err1)
+		logging.Logf("[error] forward failed proxy_id=%s name=%s err=%v", proxyID, name, err1)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "forward_io_error")
 		}
 		return
 	}
 	if err2 != nil && err2 != io.EOF {
-		logging.Logf("[server] Forward failed proxy_id=%s name=%s err=%v", proxyID, name, err2)
+		logging.Logf("[error] forward failed proxy_id=%s name=%s err=%v", proxyID, name, err2)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "forward_io_error")
 		}
 		return
 	}
 
-	logging.Logf("[server] Forward succeeded proxy_id=%s name=%s", proxyID, name)
+	logging.Logf("[forward] completed proxy_id=%s name=%s", proxyID, name)
 	if s.collector != nil {
 		s.collector.RecordForwardCommand(name)
 	}
@@ -963,14 +958,10 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 				}
 			}
 			if remoteIP != "" {
-				logging.Logf("[server] findPeerAddrByConn: trying fallback by IP=%s", remoteIP)
-
 				// First try: find from peerServices map by IP (most reliable)
 				// peerServices map now stores PeerAddr directly, so we can use it
 				if peerSvc, exists := s.peerServices[remoteIP]; exists && peerSvc != nil {
 					if peerSvc.PeerAddr != "" {
-						logging.Logf("[server] findPeerAddrByConn: FOUND from peerServices by IP=%s peer_addr=%s peer_id=%s",
-							remoteIP, peerSvc.PeerAddr, peerSvc.PeerID)
 						return peerSvc.PeerAddr
 					}
 				}
@@ -978,19 +969,16 @@ func (s *ProxyServer) findPeerAddrByConn(conn net.Conn) string {
 				// Second try: find any service from this peer IP (not local services, as they don't have PeerAddr)
 				// This helps when the requested service is local (ip=local) but we need the peer's bind address
 				// The peer that sent FORWARD should have registered other services via SYNC, which have PeerAddr
-				for key, client := range s.services {
+				for _, client := range s.services {
 					if client == nil {
 						continue
 					}
 					// Check if IP matches (for remote services, IP is the peer's IP)
 					// Exclude local services as they don't have PeerAddr
 					if client.IP == remoteIP && client.IP != "local" && client.PeerAddr != "" {
-						logging.Logf("[server] findPeerAddrByConn: FOUND by IP key=%s peer_id=%s peer_addr=%s ip=%s",
-							key, client.PeerID, client.PeerAddr, client.IP)
 						return client.PeerAddr
 					}
 				}
-				logging.Logf("[server] findPeerAddrByConn: no service found for IP=%s (may need to wait for SYNC from this peer)", remoteIP)
 			}
 		}
 	}

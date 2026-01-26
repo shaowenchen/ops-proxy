@@ -242,15 +242,21 @@ func connectToPeer(peerAddr string, registrations []struct {
 		// Use POD_IP:BIND_PORT if available, otherwise use bind_addr from config
 		peerAddr := getPeerBindAddr(cfg)
 		
-		logging.Logf("[client] preparing registration peer_id=%s peer_addr=%s services=%d", peerID, peerAddr, len(registrations))
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] preparing registration peer_id=%s peer_addr=%s services=%d", peerID, peerAddr, len(registrations))
+		}
 		
 		for _, reg := range registrations {
 			regs = append(regs, protocol.Registration{Name: reg.name, Backend: reg.backendAddr})
 		}
 		registration := protocol.FormatRegisterWithPeerID(peerID, peerAddr, regs)
 		
-		// Always log registration message to verify format
-		logging.Logf("[client] registration message: %q", strings.TrimSpace(registration))
+		// Log registration summary
+		items := make([]string, 0, len(regs))
+		for _, r := range regs {
+			items = append(items, fmt.Sprintf("%s->%s", r.Name, r.Backend))
+		}
+		logging.Logf("[register] registering %d service(s) to server:%s: %s", len(regs), link.Addr, strings.Join(items, ","))
 		
 		if cfg != nil && cfg.Log.Level == "debug" {
 			items := make([]string, 0, len(regs))
@@ -424,17 +430,16 @@ func handleConnectionWithReader(conn net.Conn, reader *bufio.Reader, serverAddre
 		}
 
 		if proxyID, name, backendAddr, ok := protocol.ParseForwardLine(line); ok {
-			logging.Logf("[client] RECEIVED FORWARD proxy_id=%s name=%s backend=%s from=%s", proxyID, name, backendAddr, serverAddress)
+			logging.Logf("[forward] received FORWARD command name=%s backend=%s from=server:%s", name, backendAddr, serverAddress)
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[debug] recv FORWARD proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
+				logging.Logf("[debug] FORWARD proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
 			}
 			// Run forwarding concurrently; control connection must keep reading more commands.
 			go func(pid, n, backend string) {
-				logging.Logf("[client] handling FORWARD proxy_id=%s name=%s backend=%s", pid, n, backend)
 				if err := handleForwardOnce(serverAddress, pid, n, backend, cfg); err != nil {
-					logging.Logf("[client] Forward failed proxy_id=%s name=%s err=%v", pid, n, err)
+					logging.Logf("[error] forward failed name=%s err=%v", n, err)
 				} else {
-					logging.Logf("[client] Forward succeeded proxy_id=%s name=%s", pid, n)
+					logging.Logf("[forward] completed name=%s", n)
 				}
 			}(proxyID, name, backendAddr)
 		} else if regs, ok := protocol.ParseSyncLine(line); ok {
@@ -502,22 +507,24 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	recordClientForwardStart(name)
 
 	// Step 1: Connect to backend
-	logging.Logf("[client] connecting to backend proxy_id=%s backend=%s", proxyID, backendAddr)
+	logging.Logf("[forward] connecting to backend name=%s backend=%s", name, backendAddr)
 	backendConn, err := net.DialTimeout("tcp", backendAddr, dialTimeout)
 	if err != nil {
 		recordClientForwardFail(name, "backend_dial_error")
-		logging.Logf("[client] backend dial failed proxy_id=%s backend=%s err=%v", proxyID, backendAddr, err)
+		logging.Logf("[error] backend dial failed name=%s backend=%s err=%v", name, backendAddr, err)
 		return fmt.Errorf("dial backend %s: %w", backendAddr, err)
 	}
 	defer backendConn.Close()
-	logging.Logf("[client] backend connected proxy_id=%s backend=%s local=%s", proxyID, backendAddr, backendConn.LocalAddr())
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[debug] backend connected name=%s backend=%s local=%s", name, backendAddr, backendConn.LocalAddr())
+	}
 
 	// Step 2: Connect back to server for DATA channel
-	logging.Logf("[client] connecting DATA channel proxy_id=%s server=%s", proxyID, serverAddress)
+	logging.Logf("[data] connecting DATA channel name=%s from=backend:%s to=server:%s", name, backendAddr, serverAddress)
 	dataConn, err := net.DialTimeout("tcp", serverAddress, dialTimeout)
 	if err != nil {
 		recordClientForwardFail(name, "data_dial_error")
-		logging.Logf("[client] DATA dial failed proxy_id=%s server=%s err=%v", proxyID, serverAddress, err)
+		logging.Logf("[error] DATA dial failed name=%s server=%s err=%v", name, serverAddress, err)
 		return fmt.Errorf("dial server data %s: %w", serverAddress, err)
 	}
 	defer dataConn.Close()
@@ -525,15 +532,15 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	// Step 3: Send DATA header to identify this connection
 	if _, err := dataConn.Write([]byte(protocol.FormatData(proxyID))); err != nil {
 		recordClientForwardFail(name, "data_header_error")
-		logging.Logf("[client] DATA header send failed proxy_id=%s err=%v", proxyID, err)
+		logging.Logf("[error] DATA header send failed name=%s err=%v", name, err)
 		return fmt.Errorf("send DATA header: %w", err)
 	}
-	logging.Logf("[client] DATA channel established proxy_id=%s", proxyID)
+	logging.Logf("[data] DATA channel established name=%s from=backend:%s to=server:%s", name, backendAddr, serverAddress)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[debug] proxy_id=%s data_connected local=%s remote=%s", proxyID, dataConn.LocalAddr(), dataConn.RemoteAddr())
+		logging.Logf("[debug] DATA connection local=%s remote=%s", dataConn.LocalAddr(), dataConn.RemoteAddr())
 	}
 
-	logging.Logf("[client] bridge start proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
+	logging.Logf("[forward] bridge started name=%s backend=%s", name, backendAddr)
 
 	// Bridge data in both directions
 	errCh := make(chan error, 2)
@@ -569,7 +576,7 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	err1 := <-errCh
 	err2 := <-errCh
 	
-	logging.Logf("[client] bridge done proxy_id=%s name=%s bytes_to_server=%d bytes_to_backend=%d", proxyID, name, bytesToServer, bytesToBackend)
+	logging.Logf("[forward] bridge completed name=%s bytes_to_server=%d bytes_to_backend=%d", name, bytesToServer, bytesToBackend)
 	
 	// Return first non-nil error
 	if err1 != nil && err1 != io.EOF {
@@ -599,9 +606,6 @@ func getPeerBindAddr(cfg *config.Config) string {
 	_, port, err := net.SplitHostPort(bindAddr)
 	if err != nil {
 		port = "6443"
-		logging.Logf("[client] getPeerBindAddr: failed to parse bind_addr=%q, using default port 6443", bindAddr)
-	} else {
-		logging.Logf("[client] getPeerBindAddr: extracted port=%s from bind_addr=%s", port, bindAddr)
 	}
 	
 	// Priority 1: LOCAL_PEER_ADDR (explicitly configured local address)
@@ -612,18 +616,20 @@ func getPeerBindAddr(cfg *config.Config) string {
 		// Ensure LOCAL_PEER_ADDR has port, add if missing
 		if !strings.Contains(localAddr, ":") {
 			localAddr = net.JoinHostPort(localAddr, port)
-			logging.Logf("[client] LOCAL_PEER_ADDR missing port, added: %s", localAddr)
 		}
-		logging.Logf("[client] using LOCAL_PEER_ADDR as peer_addr: %s", localAddr)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] using LOCAL_PEER_ADDR as peer_addr: %s", localAddr)
+		}
 		return localAddr
 	}
 	
 	// Priority 2: POD_IP:port (Kubernetes environment)
 	podIP := os.Getenv("POD_IP")
-	logging.Logf("[client] getPeerBindAddr: POD_IP=%q port=%q", podIP, port)
 	if podIP != "" {
 		addr := net.JoinHostPort(podIP, port)
-		logging.Logf("[client] using POD_IP as peer_addr: %s (POD_IP=%s port=%s)", addr, podIP, port)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] using POD_IP as peer_addr: %s", addr)
+		}
 		return addr
 	}
 	
@@ -632,22 +638,28 @@ func getPeerBindAddr(cfg *config.Config) string {
 	if hostname == "" {
 		hostname, _ = os.Hostname()
 	}
-	
+
 	if hostname != "" {
 		// Try to resolve hostname to IP
 		ips, err := net.LookupHost(hostname)
 		if err == nil && len(ips) > 0 {
 			addr := net.JoinHostPort(ips[0], port)
-			logging.Logf("[client] using hostname IP as peer_addr: %s", addr)
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[debug] using hostname IP as peer_addr: %s", addr)
+			}
 			return addr
 		}
 		// If resolution fails, use hostname directly
 		addr := net.JoinHostPort(hostname, port)
-		logging.Logf("[client] using hostname as peer_addr: %s", addr)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] using hostname as peer_addr: %s", addr)
+		}
 		return addr
 	}
 	
 	// Fallback: use bind_addr from config
-	logging.Logf("[client] using bind_addr as peer_addr (fallback): %s", bindAddr)
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[debug] using bind_addr as peer_addr (fallback): %s", bindAddr)
+	}
 	return bindAddr
 }

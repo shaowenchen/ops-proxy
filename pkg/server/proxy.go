@@ -362,9 +362,9 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 	// Debug: show extracted domain, selected client, and current service pool on this server instance.
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[debug] route details (remote=%s protocol=%s extracted=%q selected=%q services=[%s])", remote, protocol, extractedName, clientName, s.servicesDebugSnapshot())
-		// Print full service table in debug mode
-		s.logServicesTable(cfg)
+		logging.Logf("[debug] route details protocol=%s extracted=%q selected=%q from %s", protocol, extractedName, clientName, remote)
+		// Don't print full service table on every route - too verbose
+		// Service table is printed on registration/sync events
 	}
 
 	// Get client and immediately log service type (local or remote) for visibility

@@ -51,7 +51,7 @@ func (s *ProxyServer) handleUnifiedConnection(conn net.Conn, cfg *config.Config)
 
 	// Log every incoming connection at debug level
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] new connection (remote=%s)", remote)
+		logging.Logf("[debug] new connection from %s", remote)
 	}
 
 	// Read initial data to classify connection.
@@ -119,7 +119,7 @@ func (s *ProxyServer) handleUnifiedConnection(conn net.Conn, cfg *config.Config)
 		}
 		logging.Logf("[accept] registration/data request (remote=%s bytes=%d prefix=%q)", remote, len(payload), string(line[:prefixLen]))
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] registration/data request (remote=%s bytes=%d)", remote, len(payload))
+			logging.Logf("[debug] registration/data request (remote=%s bytes=%d)", remote, len(payload))
 		}
 		bufConn := &proxy.BufferedConn{Conn: conn, Buf: payload, Pos: 0}
 		s.HandleClientRegistration(bufConn, cfg)
@@ -164,7 +164,7 @@ func (s *ProxyServer) handleProxyConnection(conn net.Conn, cfg *config.Config) {
 func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *config.Config, initial []byte, n int, remote string, readTimeout time.Duration) {
 	// Log every proxy request at debug level
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] proxy request (remote=%s bytes=%d read_timeout=%s)", remote, n, readTimeout)
+		logging.Logf("[debug] proxy request from %s bytes=%d", remote, n)
 	}
 
 	// Detect protocol type and route
@@ -175,14 +175,14 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	extractHost := func(data []byte) string {
 		host := proxy.ExtractHostFromHTTP(data)
 		if cfg != nil && cfg.Log.Level == "debug" && host != "" {
-			logging.Logf("[request][debug] extracted HTTP Host (remote=%s host=%q)", remote, host)
+			logging.Logf("[debug] extracted HTTP Host=%q from %s", host, remote)
 		}
 		return host
 	}
 	extractSNI := func(data []byte) string {
 		sni := proxy.ExtractSNI(data)
 		if cfg != nil && cfg.Log.Level == "debug" && sni != "" {
-			logging.Logf("[request][debug] extracted TLS SNI (remote=%s sni=%q)", remote, sni)
+			logging.Logf("[debug] extracted TLS SNI=%q from %s", sni, remote)
 		}
 		return sni
 	}
@@ -191,7 +191,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 	// Log protocol and extracted name immediately after detection
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] protocol detected (remote=%s protocol=%s extracted_name=%q)", remote, protocol, extractedName)
+		logging.Logf("[debug] protocol=%s name=%q from %s", protocol, extractedName, remote)
 	}
 
 	// Forward proxy (HTTP CONNECT).
@@ -201,7 +201,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		host, port, ok := proxy.ExtractConnectHostPort(initial)
 		if !ok {
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] HTTP CONNECT parse failed (remote=%s)", remote)
+				logging.Logf("[debug] HTTP CONNECT parse failed (remote=%s)", remote)
 			}
 			logging.Logf("HTTP CONNECT detected but failed to parse target")
 			return
@@ -209,7 +209,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		targetAddr := net.JoinHostPort(host, port)
 
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] HTTP CONNECT request (remote=%s target=%s)", remote, targetAddr)
+			logging.Logf("[debug] HTTP CONNECT request (remote=%s target=%s)", remote, targetAddr)
 		}
 
 		// Check if ALL_PROXY is set with peer ID
@@ -281,7 +281,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 		// HTTP CONNECT directly forwards to target (no service routing)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] CONNECT direct dial (remote=%s target=%s)", remote, targetAddr)
+			logging.Logf("[debug] CONNECT direct dial (remote=%s target=%s)", remote, targetAddr)
 		}
 		s.forwardDirect(bufConn, conn, host, "forward", targetAddr, cfg, updateMetrics)
 		return
@@ -295,19 +295,19 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 				maxLen = n
 			}
 			if protocol == "http" {
-				logging.Logf("[request][debug] protocol detection (remote=%s protocol=http host_found=false bytes=%d preview=%q)", remote, n, string(initial[:maxLen]))
+				logging.Logf("[debug] protocol detection protocol=http host_found=false bytes=%d from %s", n, remote)
 			} else if protocol == "https" {
 				maxLen = 20
 				if n < maxLen {
 					maxLen = n
 				}
-				logging.Logf("[request][debug] protocol detection (remote=%s protocol=https sni_found=false bytes=%d preview=%x)", remote, n, initial[:maxLen])
+				logging.Logf("[debug] protocol detection protocol=https sni_found=false bytes=%d from %s", n, remote)
 			} else {
 				maxLen = 20
 				if n < maxLen {
 					maxLen = n
 				}
-				logging.Logf("[request][debug] protocol detection (remote=%s protocol=tcp bytes=%d preview=%x)", remote, n, initial[:maxLen])
+				logging.Logf("[debug] protocol detection protocol=tcp bytes=%d preview=%x from %s", n, initial[:maxLen], remote)
 			}
 		}
 	}
@@ -315,7 +315,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	// If clientName is empty (e.g., Host header not found or SNI extraction failed), return error
 	if clientName == "" {
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] route selection failed (remote=%s protocol=%s reason=no_host_sni)", remote, protocol)
+			logging.Logf("[debug] route selection failed protocol=%s reason=no_host_sni from %s", protocol, remote)
 		}
 		logging.Logf("[route] select_failed protocol=%s reason=no_host_sni", protocol)
 		// Return error response for HTTP requests
@@ -333,7 +333,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] route selected (remote=%s name=%q protocol=%s reason=extracted extracted=%q)", remote, clientName, protocol, extractedName)
+		logging.Logf("[debug] route selected name=%q protocol=%s from %s", clientName, protocol, remote)
 	}
 	logging.Logf("[route] selected name=%q protocol=%s reason=extracted", clientName, protocol)
 
@@ -357,12 +357,12 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	logging.Logf("[route] STEP5: after servicesByNameSnapshot, candidates=%q", candidates)
 	logging.Logf("[route] candidates name=%q items=%s", clientName, candidates)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] svc candidates (name=%q items=%s)", clientName, candidates)
+		logging.Logf("[debug] svc candidates (name=%q items=%s)", clientName, candidates)
 	}
 
 	// Debug: show extracted domain, selected client, and current service pool on this server instance.
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] route details (remote=%s protocol=%s extracted=%q selected=%q services=[%s])", remote, protocol, extractedName, clientName, s.servicesDebugSnapshot())
+		logging.Logf("[debug] route details (remote=%s protocol=%s extracted=%q selected=%q services=[%s])", remote, protocol, extractedName, clientName, s.servicesDebugSnapshot())
 		// Print full service table in debug mode
 		s.logServicesTable(cfg)
 	}
@@ -420,7 +420,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		logging.Logf("[route] service not found name=%s (remote=%s protocol=%s)", clientName, remote, protocol)
 		logging.Logf("[tunnel] Client %s not found (remote=%s protocol=%s)", clientName, remote, protocol)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] client not found (remote=%s name=%s protocol=%s)", remote, clientName, protocol)
+			logging.Logf("[debug] client not found (remote=%s name=%s protocol=%s)", remote, clientName, protocol)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "no_client")
@@ -429,7 +429,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		if client == nil {
 			logging.Logf("[tunnel] No client available for proxy")
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] no client available (remote=%s protocol=%s)", remote, protocol)
+				logging.Logf("[debug] no client available (remote=%s protocol=%s)", remote, protocol)
 			}
 			if s.collector != nil {
 				s.collector.RecordProxyError(clientName, "no_client")
@@ -463,7 +463,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		logging.Logf("[route] DECISION: handle locally - name=%s backend=%s client=%s", clientName, client.BackendAddr, remote)
 		logging.Logf("[tunnel] local service direct forward name=%s backend=%s", clientName, client.BackendAddr)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] local service direct forward (remote=%s name=%s backend=%s)", remote, clientName, client.BackendAddr)
+			logging.Logf("[debug] local service direct forward (remote=%s name=%s backend=%s)", remote, clientName, client.BackendAddr)
 		}
 
 		// Metrics callback
@@ -496,7 +496,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	if !client.Connected {
 		logging.Logf("[tunnel] Remote client %s (peer_id=%s remote_peer_addr=%s) not connected - cannot forward", clientName, client.PeerID, client.IP)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] remote client not connected (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
+			logging.Logf("[debug] remote client not connected (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "remote_not_connected")
@@ -512,7 +512,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	if client.Conn == nil {
 		logging.Logf("[tunnel] ERROR: Remote client %s (peer_id=%s remote_peer_addr=%s) connection is nil - cannot forward", clientName, client.PeerID, client.IP)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] remote client conn is nil (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
+			logging.Logf("[debug] remote client conn is nil (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
 		// IMPORTANT: For unidirectional connections (Peer A has remote_peer_addr, Peer B doesn't):
 		// - Peer A connects to Peer B (incoming connection from Peer B's perspective)
@@ -536,7 +536,7 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		logging.Logf("[tunnel] Remote client %s (peer_id=%s remote_peer_addr=%s) connection is closed - cannot forward", clientName, client.PeerID, client.IP)
 		client.Connected = false
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] remote client conn is closed (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
+			logging.Logf("[debug] remote client conn is closed (remote=%s name=%s peer_id=%s remote_peer_addr=%s)", remote, clientName, client.PeerID, client.IP)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(clientName, "remote_conn_closed")
@@ -558,8 +558,8 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 		if backend == "" && client.IP != "" {
 			backend = net.JoinHostPort(client.IP, "80")
 		}
-		logging.Logf("[request][debug] selected backend (remote=%s name=%s protocol=%s backend=%s)", remote, clientName, protocol, backend)
-		logging.Logf("[request][debug] starting tunnel forward (remote=%s name=%s protocol=%s backend=%s peer_id=%s remote_peer_addr=%s)",
+		logging.Logf("[debug] selected backend (remote=%s name=%s protocol=%s backend=%s)", remote, clientName, protocol, backend)
+		logging.Logf("[debug] starting tunnel forward (remote=%s name=%s protocol=%s backend=%s peer_id=%s remote_peer_addr=%s)",
 			remote, clientName, protocol, client.BackendAddr, client.PeerID, client.IP)
 	}
 
@@ -631,7 +631,7 @@ func (s *ProxyServer) forwardDirect(srcReader io.Reader, srcConn net.Conn, name,
 	// Always log direct forward start (not just debug)
 	logging.Logf("[reverse] direct forward start name=%s protocol=%s backend=%s remote=%s", name, protocol, backendAddr, remote)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] direct forward start (remote=%s name=%s protocol=%s backend=%s)", remote, name, protocol, backendAddr)
+		logging.Logf("[debug] direct forward start (remote=%s name=%s protocol=%s backend=%s)", remote, name, protocol, backendAddr)
 	}
 
 	if s.collector != nil {
@@ -644,7 +644,7 @@ func (s *ProxyServer) forwardDirect(srcReader io.Reader, srcConn net.Conn, name,
 		dialTimeout = cfg.GetDialTimeout()
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] direct dial attempt (remote=%s backend=%s dial_timeout=%s)", remote, backendAddr, dialTimeout)
+		logging.Logf("[debug] direct dial attempt (remote=%s backend=%s dial_timeout=%s)", remote, backendAddr, dialTimeout)
 	}
 
 	logging.Logf("[reverse] dialing backend name=%s backend=%s timeout=%s", name, backendAddr, dialTimeout)
@@ -652,7 +652,7 @@ func (s *ProxyServer) forwardDirect(srcReader io.Reader, srcConn net.Conn, name,
 	if err != nil {
 		logging.Logf("[reverse] dial failed name=%s backend=%s err=%v", name, backendAddr, err)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] direct dial failed (remote=%s name=%s backend=%s err=%v)", remote, name, backendAddr, err)
+			logging.Logf("[debug] direct dial failed (remote=%s name=%s backend=%s err=%v)", remote, name, backendAddr, err)
 		}
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "backend_dial_error")
@@ -673,8 +673,8 @@ func (s *ProxyServer) forwardDirect(srcReader io.Reader, srcConn net.Conn, name,
 	}
 	logging.Logf("[reverse] dial connected name=%s backend=%s local=%s peer=%s", name, backendAddr, local, peer)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] direct dial connected (remote=%s backend=%s local=%s peer=%s)", remote, backendAddr, local, peer)
-		logging.Logf("[request][debug] direct bridge start (remote=%s name=%s protocol=%s)", remote, name, protocol)
+		logging.Logf("[debug] direct dial connected (remote=%s backend=%s local=%s peer=%s)", remote, backendAddr, local, peer)
+		logging.Logf("[debug] direct bridge start (remote=%s name=%s protocol=%s)", remote, name, protocol)
 	}
 
 	var bytesTx, bytesRx int64
@@ -744,7 +744,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		remote = srcConn.RemoteAddr().String()
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] tunnel forward start (remote=%s name=%s protocol=%s backend=%s proxy_id=%s)", remote, name, protocol, backendAddr, proxyID)
+		logging.Logf("[debug] tunnel forward start (remote=%s name=%s protocol=%s backend=%s proxy_id=%s)", remote, name, protocol, backendAddr, proxyID)
 	}
 
 	ch := make(chan net.Conn, 1)
@@ -756,7 +756,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	}
 	s.pendingLock.Unlock()
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] created pending DATA channel (proxy_id=%s name=%s pending_count=%d)", proxyID, name, pendingCount)
+		logging.Logf("[debug] created pending DATA channel (proxy_id=%s name=%s pending_count=%d)", proxyID, name, pendingCount)
 	}
 
 	cleanupPending := func() {
@@ -817,7 +817,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 	logging.Logf("[tunnel] SENDING FORWARD proxy_id=%s name=%s backend=%s peer_id=%s remote_peer_addr=%s client=%s",
 		proxyID, name, backendAddr, client.PeerID, client.IP, remote)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] FORWARD command (proxy_id=%s cmd=%q peer_remote=%s)", proxyID, strings.TrimSpace(cmd), remoteAddr)
+		logging.Logf("[debug] FORWARD command (proxy_id=%s cmd=%q peer_remote=%s)", proxyID, strings.TrimSpace(cmd), remoteAddr)
 	}
 	_, err := client.Conn.Write([]byte(cmd))
 	if err != nil {
@@ -838,7 +838,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		s.collector.RecordForwardCommand(name)
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] FORWARD command sent (proxy_id=%s client=%s name=%s backend=%s)", proxyID, remote, name, backendAddr)
+		logging.Logf("[debug] FORWARD command sent (proxy_id=%s client=%s name=%s backend=%s)", proxyID, remote, name, backendAddr)
 	}
 
 	// Wait for DATA on control connection (peer-to-peer: long connection)
@@ -852,7 +852,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		dataTimeout = cfg.GetConnectionTimeout()
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] waiting for DATA on control connection (proxy_id=%s name=%s timeout=%s)", proxyID, name, dataTimeout)
+		logging.Logf("[debug] waiting for DATA on control connection (proxy_id=%s name=%s timeout=%s)", proxyID, name, dataTimeout)
 	}
 	select {
 	case dataConn = <-ch:
@@ -865,13 +865,13 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 			s.collector.RecordDataMatched(name)
 		}
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA received on control connection (remote=%s name=%s proxy_id=%s data_peer=%s)", remote, name, proxyID, peer)
-			logging.Logf("[request][debug] bridge start (remote=%s name=%s protocol=%s proxy_id=%s)", remote, name, protocol, proxyID)
+			logging.Logf("[debug] DATA received on control connection (remote=%s name=%s proxy_id=%s data_peer=%s)", remote, name, proxyID, peer)
+			logging.Logf("[debug] bridge start (remote=%s name=%s protocol=%s proxy_id=%s)", remote, name, protocol, proxyID)
 		}
 	case <-time.After(dataTimeout):
 		logging.Logf("[tunnel] DATA timeout on control connection proxy_id=%s name=%s peer_id=%s timeout=%s", proxyID, name, client.PeerID, dataTimeout)
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA connection timeout (proxy_id=%s client=%s name=%s timeout=%s)", proxyID, remote, name, dataTimeout)
+			logging.Logf("[debug] DATA connection timeout (proxy_id=%s client=%s name=%s timeout=%s)", proxyID, remote, name, dataTimeout)
 		}
 		if s.collector != nil {
 			s.collector.RecordDataTimeout(name)
@@ -887,7 +887,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 
 	logging.Logf("[tunnel] bridge start name=%s proxy_id=%s", name, proxyID)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] starting data bridge (remote=%s name=%s proxy_id=%s)", remote, name, proxyID)
+		logging.Logf("[debug] starting data bridge (remote=%s name=%s proxy_id=%s)", remote, name, proxyID)
 	}
 
 	var bytesTx, bytesRx int64
@@ -897,7 +897,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		n, err := io.Copy(dataConn, srcReader) // client -> data connection (to peer)
 		bytesTx = n
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] client->peer done (proxy_id=%s bytes=%d err=%v)", proxyID, n, err)
+			logging.Logf("[debug] client->peer done (proxy_id=%s bytes=%d err=%v)", proxyID, n, err)
 		}
 		// Don't close control connection write side - it's still used for other commands
 		// Only signal EOF by not writing more data
@@ -907,7 +907,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		n, err := io.Copy(srcConn, dataConn) // data connection (from peer) -> client
 		bytesRx = n
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] peer->client done (proxy_id=%s bytes=%d err=%v)", proxyID, n, err)
+			logging.Logf("[debug] peer->client done (proxy_id=%s bytes=%d err=%v)", proxyID, n, err)
 		}
 		// Close write side to signal EOF to client
 		if tcpConn, ok := srcConn.(*net.TCPConn); ok {
@@ -926,13 +926,13 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		err = err2
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] bridge completed (remote=%s name=%s proxy_id=%s bytes_tx=%d bytes_rx=%d err1=%v err2=%v)", remote, name, proxyID, bytesTx, bytesRx, err1, err2)
+		logging.Logf("[debug] bridge completed (remote=%s name=%s proxy_id=%s bytes_tx=%d bytes_rx=%d err1=%v err2=%v)", remote, name, proxyID, bytesTx, bytesRx, err1, err2)
 	}
 
 	success := err == nil || err == io.EOF
 	if !success {
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] bridge error (remote=%s name=%s protocol=%s proxy_id=%s err=%v)", remote, name, protocol, proxyID, err)
+			logging.Logf("[debug] bridge error (remote=%s name=%s protocol=%s proxy_id=%s err=%v)", remote, name, protocol, proxyID, err)
 		}
 		logging.Logf("[tunnel] Proxy data error for %s: %v", name, err)
 		if s.collector != nil {
@@ -943,7 +943,7 @@ func (s *ProxyServer) forwardOnce(srcReader io.Reader, srcConn net.Conn, name, p
 		update(name, protocol, success, bytesTx, bytesRx, time.Since(start))
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[request][debug] bridge done (remote=%s name=%s protocol=%s proxy_id=%s bytes_tx=%d bytes_rx=%d duration=%s success=%t err=%v)", remote, name, protocol, proxyID, bytesTx, bytesRx, time.Since(start), success, err)
+		logging.Logf("[debug] bridge done (remote=%s name=%s protocol=%s proxy_id=%s bytes_tx=%d bytes_rx=%d duration=%s success=%t err=%v)", remote, name, protocol, proxyID, bytesTx, bytesRx, time.Since(start), success, err)
 	}
 }
 

@@ -114,8 +114,7 @@ func (s *ProxyServer) RegisterClientByNameWithPeerInfo(name, ip, backendAddr str
 				// Update LastSeen and Connected to keep connection state fresh
 				existingClient.LastSeen = time.Now()
 				existingClient.Connected = connected
-				logging.Logf("[registry] heartbeat update - service unchanged name=%q peer_id=%q backend=%q connected=%t",
-					name, existingPeerID, backendAddr, connected)
+				// Heartbeat update - no need to log unless in debug mode (handled by caller)
 				return // Skip full update if nothing changed
 			}
 
@@ -276,9 +275,9 @@ func (s *ProxyServer) GetClientByPeerID(peerID string) *types.ClientInfo {
 	if peerID == "" {
 		return nil
 	}
-	
+
 	logging.Logf("[GetClientByPeerID] searching for peer_id=%q services_count=%d", peerID, len(s.services))
-	
+
 	// First, try to find from peerServices map
 	for peerIP, peerSvc := range s.peerServices {
 		if peerSvc != nil && peerSvc.PeerID == peerID {
@@ -318,7 +317,7 @@ func (s *ProxyServer) GetClientByPeerID(peerID string) *types.ClientInfo {
 			}
 		}
 	}
-	
+
 	// Second, try to find from services map
 	for key, client := range s.services {
 		if client == nil {
@@ -333,7 +332,7 @@ func (s *ProxyServer) GetClientByPeerID(peerID string) *types.ClientInfo {
 			return client
 		}
 	}
-	
+
 	logging.Logf("[GetClientByPeerID] no client found for peer_id=%q", peerID)
 	return nil
 }
@@ -439,27 +438,25 @@ func (s *ProxyServer) logServicesTable(cfg *config.Config) {
 	if cfg == nil || cfg.Log.Level != "debug" {
 		return
 	}
-	peerID := logging.GetPeerID()
 	lines := s.servicesTableLines()
 	if len(lines) == 0 {
 		return
 	}
 	// Format as single line similar to route details
 	servicesStr := strings.Join(lines, "")
-	logging.Logf("[registry] services peer_id=%s %s", peerID, servicesStr)
+	logging.Logf("[debug] services: %s", servicesStr)
 }
 
 // LogServicesTable prints the full services list in route details format (public wrapper).
 // Always prints regardless of log level.
 func (s *ProxyServer) LogServicesTable() {
-	peerID := logging.GetPeerID()
 	lines := s.servicesTableLines()
 	if len(lines) == 0 {
 		return
 	}
 	// Format as single line similar to route details
 	servicesStr := strings.Join(lines, "")
-	logging.Logf("[registry] services peer_id=%s %s", peerID, servicesStr)
+	logging.Logf("[registry] services: %s", servicesStr)
 }
 
 // logPeerServicesMap prints the full peerServices map structure

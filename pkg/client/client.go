@@ -237,27 +237,27 @@ func connectToPeer(peerAddr string, registrations []struct {
 		// Build registration message with peer_id and peer_addr
 		regs := make([]protocol.Registration, 0, len(registrations))
 		peerID := logging.GetPeerID()
-		
+
 		// Get peer's real bind address for DATA connections
 		// Use POD_IP:BIND_PORT if available, otherwise use bind_addr from config
 		peerAddr := getPeerBindAddr(cfg)
-		
+
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[debug] preparing registration peer_id=%s peer_addr=%s services=%d", peerID, peerAddr, len(registrations))
 		}
-		
+
 		for _, reg := range registrations {
 			regs = append(regs, protocol.Registration{Name: reg.name, Backend: reg.backendAddr})
 		}
 		registration := protocol.FormatRegisterWithPeerID(peerID, peerAddr, regs)
-		
+
 		// Log registration summary
 		items := make([]string, 0, len(regs))
 		for _, r := range regs {
 			items = append(items, fmt.Sprintf("%s->%s", r.Name, r.Backend))
 		}
 		logging.Logf("[register] registering %d service(s) to server:%s: %s", len(regs), link.Addr, strings.Join(items, ","))
-		
+
 		if cfg != nil && cfg.Log.Level == "debug" {
 			items := make([]string, 0, len(regs))
 			for _, r := range regs {
@@ -314,21 +314,22 @@ func connectToPeer(peerAddr string, registrations []struct {
 						syncPeerID = regs[0].PeerID
 						syncPeerAddr = regs[0].PeerAddr
 					}
-					logging.Logf("[registry] received SYNC from %s (peer_id=%s peer_addr=%s count=%d conn=%v)", 
-						serverIP, syncPeerID, syncPeerAddr, len(regs), conn != nil)
+					logging.Logf("[sync] received %d service(s) from server:%s", len(regs), serverIP)
 					for _, reg := range regs {
 						if strings.TrimSpace(reg.Name) == "" || strings.TrimSpace(reg.Backend) == "" {
 							continue
 						}
 						if cfg != nil && cfg.Log.Level == "debug" {
-							logging.Logf("[debug] sync service name=%s backend=%s peer_id=%s from=%s", 
-								reg.Name, reg.Backend, syncPeerID, serverIP)
+							logging.Logf("[debug] sync service name=%s backend=%s from=%s",
+								reg.Name, reg.Backend, serverIP)
 						}
 						// Use RegisterClientByNameWithPeerInfo to preserve peer_id (e.g., ops-proxy-xxx) instead of IP (e.g., 120.92.88.191)
 						// Pass the actual connection so services can be forwarded
 						proxyServer.RegisterClientByNameWithPeerInfo(reg.Name, serverIP, reg.Backend, conn, syncPeerID, syncPeerAddr)
 					}
-					logging.Logf("[registry] synced %d service(s) from peer %s (peer_id=%s)", len(regs), serverIP, syncPeerID)
+					if cfg != nil && cfg.Log.Level == "debug" {
+						logging.Logf("[debug] synced %d service(s) from server:%s", len(regs), serverIP)
+					}
 					proxyServer.LogServicesTable()
 				}
 			} else if !strings.HasPrefix(syncLine, "OK") && syncLine != "" {
@@ -366,7 +367,9 @@ func connectToPeer(peerAddr string, registrations []struct {
 				case <-ticker.C:
 					_, _ = conn.Write([]byte(registration))
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[request][debug] heartbeat sent (peer=%s interval=%s)", link.Addr, heartbeatInterval)
+						if cfg != nil && cfg.Log.Level == "debug" {
+							logging.Logf("[debug] heartbeat sent to server:%s interval=%s", link.Addr, heartbeatInterval)
+						}
 					}
 				case <-stopReg:
 					return
@@ -462,22 +465,21 @@ func handleConnectionWithReader(conn net.Conn, reader *bufio.Reader, serverAddre
 					syncPeerID = regs[0].PeerID
 					syncPeerAddr = regs[0].PeerAddr
 				}
-				logging.Logf("[registry] received SYNC from %s (peer_id=%s peer_addr=%s count=%d conn=%v)", 
-					serverIP, syncPeerID, syncPeerAddr, len(regs), conn != nil)
+				logging.Logf("[sync] received %d service(s) from server:%s", len(regs), serverIP)
 				for _, reg := range regs {
 					if strings.TrimSpace(reg.Name) == "" || strings.TrimSpace(reg.Backend) == "" {
 						continue
 					}
 					if cfg != nil && cfg.Log.Level == "debug" {
-						logging.Logf("[debug] sync service name=%s backend=%s peer_id=%s from=%s", 
-							reg.Name, reg.Backend, syncPeerID, serverIP)
+						logging.Logf("[debug] sync service name=%s backend=%s from=%s",
+							reg.Name, reg.Backend, serverIP)
 					}
 					// Use RegisterClientByNameWithPeerInfo to preserve peer_id (e.g., ops-proxy-xxx) instead of IP (e.g., 120.92.88.191)
 					// Pass the actual connection so services can be forwarded
 					proxyServer.RegisterClientByNameWithPeerInfo(reg.Name, serverIP, reg.Backend, conn, syncPeerID, syncPeerAddr)
 				}
 				if cfg != nil && cfg.Log.Level == "debug" {
-					logging.Logf("[debug] synced %d service(s) from peer %s (peer_id=%s)", len(regs), serverIP, syncPeerID)
+					logging.Logf("[debug] synced %d service(s) from server:%s", len(regs), serverIP)
 				}
 				// Print service table after sync
 				proxyServer.LogServicesTable()
@@ -545,7 +547,7 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	// Bridge data in both directions
 	errCh := make(chan error, 2)
 	var bytesToServer, bytesToBackend int64
-	
+
 	go func() {
 		n, e := io.Copy(dataConn, backendConn) // backend -> server
 		bytesToServer = n
@@ -558,7 +560,7 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 		}
 		errCh <- e
 	}()
-	
+
 	go func() {
 		n, e := io.Copy(backendConn, dataConn) // server -> backend
 		bytesToBackend = n
@@ -575,9 +577,9 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 	// Wait for both directions to complete
 	err1 := <-errCh
 	err2 := <-errCh
-	
+
 	logging.Logf("[forward] bridge completed name=%s bytes_to_server=%d bytes_to_backend=%d", name, bytesToServer, bytesToBackend)
-	
+
 	// Return first non-nil error
 	if err1 != nil && err1 != io.EOF {
 		recordClientForwardFail(name, "io_error")
@@ -587,7 +589,7 @@ func handleForwardOnce(serverAddress, proxyID, name, backendAddr string, cfg *co
 		recordClientForwardFail(name, "io_error")
 		return err2
 	}
-	
+
 	recordClientForwardSuccess(name)
 	return nil
 }
@@ -601,13 +603,13 @@ func getPeerBindAddr(cfg *config.Config) string {
 	if cfg != nil && cfg.Peer.BindAddr != "" {
 		bindAddr = cfg.Peer.BindAddr
 	}
-	
+
 	// Extract port from bind_addr
 	_, port, err := net.SplitHostPort(bindAddr)
 	if err != nil {
 		port = "6443"
 	}
-	
+
 	// Priority 1: LOCAL_PEER_ADDR (explicitly configured local address)
 	// This allows each peer to specify its address for other peers to connect
 	// Can be LoadBalancer, Service name, or direct IP
@@ -622,7 +624,7 @@ func getPeerBindAddr(cfg *config.Config) string {
 		}
 		return localAddr
 	}
-	
+
 	// Priority 2: POD_IP:port (Kubernetes environment)
 	podIP := os.Getenv("POD_IP")
 	if podIP != "" {
@@ -632,7 +634,7 @@ func getPeerBindAddr(cfg *config.Config) string {
 		}
 		return addr
 	}
-	
+
 	// Priority 3: Hostname resolution
 	hostname := os.Getenv("HOSTNAME")
 	if hostname == "" {
@@ -656,7 +658,7 @@ func getPeerBindAddr(cfg *config.Config) string {
 		}
 		return addr
 	}
-	
+
 	// Fallback: use bind_addr from config
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[debug] using bind_addr as peer_addr (fallback): %s", bindAddr)

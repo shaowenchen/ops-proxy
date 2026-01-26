@@ -35,7 +35,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 	conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] registration read error (remote=%s err=%v)", remote, err)
+			logging.Logf("[debug] registration read error (remote=%s err=%v)", remote, err)
 		}
 		if err.Error() != "EOF" {
 			logging.Logf("Error reading registration: %v", err)
@@ -60,11 +60,11 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 	// Used as a per-request data tunnel (one request -> one data connection).
 	if proxyID, ok := protocol.ParseDataLine(firstLine); ok {
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA connection request (remote=%s proxy_id=%s)", clientIP, proxyID)
+			logging.Logf("[debug] DATA connection request (remote=%s proxy_id=%s)", clientIP, proxyID)
 		}
 		if proxyID == "" {
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] invalid DATA message (remote=%s)", clientIP)
+				logging.Logf("[debug] invalid DATA message (remote=%s)", clientIP)
 			}
 			logging.Logf("Invalid DATA message")
 			_ = conn.Close()
@@ -80,7 +80,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 
 		if ch == nil {
 			if cfg != nil && cfg.Log.Level == "debug" {
-				logging.Logf("[request][debug] unexpected DATA connection (remote=%s proxy_id=%s reason=no_pending_forward)", clientIP, proxyID)
+				logging.Logf("[debug] unexpected DATA connection (remote=%s proxy_id=%s reason=no_pending_forward)", clientIP, proxyID)
 			}
 			logging.Logf("Unexpected DATA connection for proxy-id=%s (no pending forward)", proxyID)
 			if s.collector != nil {
@@ -91,7 +91,7 @@ func (s *ProxyServer) HandleClientRegistration(conn net.Conn, cfg *config.Config
 		}
 
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[request][debug] DATA connection matched (remote=%s proxy_id=%s)", clientIP, proxyID)
+			logging.Logf("[debug] DATA connection matched (remote=%s proxy_id=%s)", clientIP, proxyID)
 		}
 		// Hand off the connection to the waiting proxy goroutine.
 		ch <- conn
@@ -650,13 +650,13 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 			continue
 		}
 		if cfg != nil && cfg.Log.Level == "debug" {
-			logging.Logf("[debug] registering synced service name=%q backend=%q peer_id=%q peer_ip=%s peer_addr=%q",
-				name, backend, syncPeerID, peerIP, syncPeerAddr)
+			logging.Logf("[debug] registering synced service name=%q backend=%q from=%s",
+				name, backend, peerIP)
 		}
 		s.RegisterClientByNameWithPeerInfo(name, peerIP, backend, peerConn, syncPeerID, syncPeerAddr)
 	}
 
-	logging.Logf("[sync] updated peer services peer_id=%s peer_ip=%s count=%d", syncPeerID, peerIP, len(peerSvc.Services))
+	logging.Logf("[sync] updated %d service(s) from %s", len(peerSvc.Services), peerIP)
 
 	// Step 3: Print full peerServices map structure
 	// Design doc requirement: print complete peerServices map structure

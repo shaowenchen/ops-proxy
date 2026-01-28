@@ -30,7 +30,14 @@ func ParseDataLine(line string) (proxyID string, ok bool) {
 	if !strings.HasPrefix(line, CmdData+":") {
 		return "", false
 	}
-	proxyID = strings.TrimSpace(strings.TrimPrefix(line, CmdData+":"))
+	// Extract only the first token (proxy_id) after "DATA:", ignoring any trailing text
+	rest := strings.TrimPrefix(line, CmdData+":")
+	// Split on whitespace and take the first token
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return "", false
+	}
+	proxyID = strings.TrimSpace(fields[0])
 	return proxyID, proxyID != ""
 }
 

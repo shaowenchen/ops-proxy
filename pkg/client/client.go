@@ -484,6 +484,16 @@ func handleConnectionWithReader(conn net.Conn, reader *bufio.Reader, serverAddre
 				// Print service table after sync
 				proxyServer.LogServicesTable()
 			}
+		} else if proxyID, ok := protocol.ParseDataLine(line); ok {
+			// Handle DATA command on control connection (peer-to-peer scenario)
+			// In peer-to-peer scenarios, DATA commands can be sent on the control connection
+			// The client typically doesn't need to handle these, but we should log and ignore
+			// to avoid "Unknown command" errors
+			if cfg != nil && cfg.Log.Level == "debug" {
+				logging.Logf("[debug] received DATA command on control connection proxy_id=%s (ignoring)", proxyID)
+			}
+			// Note: DATA commands on control connection are handled by the server side
+			// This is just to prevent "Unknown command" errors
 		} else {
 			logging.Logf("Unknown command: %s", line)
 		}

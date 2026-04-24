@@ -1,0 +1,19 @@
+# Google Cloud Managed Service for Prometheus (GMP).
+# PodMonitoring 仅抓取**与其同命名空间**的 Pod；workload 在 ops-system 时，
+# 应使用集群作用域的 ClusterPodMonitoring，通过标签匹配目标 Pod。
+#
+# Docs: https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-managed
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: ops-proxy
+spec:
+  selector:
+    matchLabels:
+      app: ops-proxy
+      component: ops-proxy
+  endpoints:
+    - port: metrics
+      scheme: http
+      path: /metrics
+      interval: 30s

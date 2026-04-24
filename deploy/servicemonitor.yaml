@@ -4,8 +4,8 @@ metadata:
   name: ops-proxy
   namespace: monitoring
   labels:
-    app: ops-proxy
-    component: ops-proxy
+    app.kubernetes.io/name: ops-proxy
+    release: prometheus
 spec:
   selector:
     matchLabels:

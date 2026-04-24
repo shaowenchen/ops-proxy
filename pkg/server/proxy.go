@@ -181,6 +181,11 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 	extractSNI := func(data []byte) string {
 		sni := proxy.ExtractSNI(data)
+		if sni != "" {
+			if h, _, err := net.SplitHostPort(sni); err == nil {
+				sni = h
+			}
+		}
 		if cfg != nil && cfg.Log.Level == "debug" && sni != "" {
 			logging.Logf("[debug] extracted TLS SNI=%q from %s", sni, remote)
 		}
@@ -337,27 +342,18 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 	}
 	logging.Logf("[route] selected name=%q protocol=%s reason=extracted", clientName, protocol)
 
-	// Debug: show selected service candidates for this name.
-	// Always show this to help diagnose routing issues
-	// Force flush log immediately to ensure visibility
-	logging.Logf("[route] STEP1: checking candidates for name=%q", clientName)
-	logging.Logf("[route] STEP2: about to call servicesByNameSnapshot name=%q", clientName)
 	var candidates string
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logging.Logf("[route] panic in servicesByNameSnapshot: %v", r)
-				candidates = "<panic>"
-			}
-		}()
-		logging.Logf("[route] STEP3: calling servicesByNameSnapshot name=%q", clientName)
-		candidates = s.servicesByNameSnapshot(clientName)
-		logging.Logf("[route] STEP4: servicesByNameSnapshot returned candidates=%q", candidates)
-	}()
-	logging.Logf("[route] STEP5: after servicesByNameSnapshot, candidates=%q", candidates)
-	logging.Logf("[route] candidates name=%q items=%s", clientName, candidates)
 	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[debug] svc candidates (name=%q items=%s)", clientName, candidates)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logging.Logf("[route] panic in servicesByNameSnapshot: %v", r)
+					candidates = "<panic>"
+				}
+			}()
+			candidates = s.servicesByNameSnapshot(clientName)
+		}()
+		logging.Logf("[debug] svc candidates name=%q items=%s", clientName, candidates)
 	}
 
 	// Debug: show extracted domain, selected client, and current service pool on this server instance.
@@ -397,7 +393,9 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 
 	// If not using ALL_PROXY or peer not found, use normal routing
 	if client == nil {
-		logging.Logf("[route] calling GetClient name=%q", clientName)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] calling GetClient name=%q", clientName)
+		}
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -407,7 +405,9 @@ func (s *ProxyServer) handleProxyConnectionFromInitial(conn net.Conn, cfg *confi
 			}()
 			client = s.GetClient(clientName)
 		}()
-		logging.Logf("[route] GetClient returned client=%v", client != nil)
+		if cfg != nil && cfg.Log.Level == "debug" {
+			logging.Logf("[debug] GetClient returned ok=%v", client != nil)
+		}
 	}
 	if client != nil {
 		serviceType := "remote"

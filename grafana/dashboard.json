@@ -3,7 +3,7 @@
     "tags": ["ops-proxy", "proxy", "peer"],
     "timezone": "browser",
     "schemaVersion": 27,
-    "version": 2,
+    "version": 3,
     "refresh": "",
     "panels": [
       {
@@ -362,6 +362,49 @@
             "format": "short"
           }
         ]
+      },
+      {
+        "id": 16,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 96},
+        "type": "graph",
+        "title": "FORWARD commands rate (tunnel egress)",
+        "description": "Listening peer sends FORWARD to remote peer per proxied connection.",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "sum by (client_name, pod) (rate(ops_proxy_forward_commands_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m]))",
+            "legendFormat": "{{client_name}} - {{pod}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "FORWARD/s"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 17,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 96},
+        "type": "graph",
+        "title": "Client FORWARD handler rate",
+        "description": "Outbound peer handles FORWARD from remote (dials backend + DATA channel).",
+        "datasource": "$datasource",
+        "targets": [
+          {
+            "expr": "sum by (client_name, pod) (rate(ops_proxy_client_forwards_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m]))",
+            "legendFormat": "{{client_name}} - {{pod}}",
+            "refId": "A"
+          },
+          {
+            "expr": "sum by (client_name, reason, pod) (rate(ops_proxy_client_forwards_failed_total{cluster=~\"$cluster\", namespace=~\"$namespace\", client_name=~\"$name\", pod=~\"$pod\"}[5m]))",
+            "legendFormat": "{{reason}} - {{client_name}} - {{pod}}",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Events/s"},
+          {"format": "short"}
+        ]
       }
     ],
     "templating": {
@@ -370,13 +413,16 @@
           "name": "datasource",
           "type": "datasource",
           "query": "prometheus",
+          "pluginId": "prometheus",
+          "refresh": 1,
           "current": {
+            "selected": true,
             "text": "ops",
             "value": "ops"
           },
           "options": [],
           "hide": 0,
-          "label": "datasource"
+          "label": "Data source"
         },
         {
           "name": "cluster",
@@ -403,6 +449,11 @@
           "multi": false,
           "includeAll": true,
           "allValue": ".*",
+          "current": {
+            "selected": true,
+            "text": "ops-system",
+            "value": "ops-system"
+          },
           "hide": 0,
           "label": "namespace"
         },

@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -85,127 +84,127 @@ func NewCollector(getClients func() map[string]interface{}, getClientStatus func
 		serverInfo: prometheus.NewDesc(
 			"ops_proxy_server_info",
 			"Peer listening process info metric (always 1). Present when peer is listening for connections.",
-			[]string{"node", "pod"},
+			[]string{"namespace", "node", "pod"},
 			nil,
 		),
 		clientsTotal: prometheus.NewDesc(
 			"ops_proxy_clients_total",
 			"Total number of registered routing names (services) in this listening peer instance",
-			[]string{"node", "pod"},
+			[]string{"namespace", "node", "pod"},
 			nil,
 		),
 		clientsConnected: prometheus.NewDesc(
 			"ops_proxy_clients_connected",
 			"Number of currently connected routing names (services) in this listening peer instance",
-			[]string{"node", "pod"},
+			[]string{"namespace", "node", "pod"},
 			nil,
 		),
 		clientUp: prometheus.NewDesc(
 			"ops_proxy_client_up",
 			"Service connection status by registered name (1=connected, 0=disconnected)",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		clientRegistrationsTotal: prometheus.NewDesc(
 			"ops_proxy_client_registrations_total",
 			"Total REGISTER refreshes received for a routing name (service)",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		clientDisconnectsTotal: prometheus.NewDesc(
 			"ops_proxy_client_disconnects_total",
 			"Total disconnect/unregister events for a routing name (service)",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		connectionsTotal: prometheus.NewDesc(
 			"ops_proxy_connections_total",
 			"Total number of proxy connections",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		connectionsActive: prometheus.NewDesc(
 			"ops_proxy_connections_active",
 			"Number of active proxy connections",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		connectionsFailed: prometheus.NewDesc(
 			"ops_proxy_connections_failed_total",
 			"Total number of failed proxy connections",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		connectionsBytesTx: prometheus.NewDesc(
 			"ops_proxy_connections_bytes_tx_total",
 			"Total bytes transmitted",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		connectionsBytesRx: prometheus.NewDesc(
 			"ops_proxy_connections_bytes_rx_total",
 			"Total bytes received",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		proxyRequestsTotal: prometheus.NewDesc(
 			"ops_proxy_requests_total",
 			"Total number of proxy requests",
-			[]string{"client_name", "protocol", "node", "pod"},
+			[]string{"client_name", "protocol", "namespace", "node", "pod"},
 			nil,
 		),
 		proxyRequestsSuccess: prometheus.NewDesc(
 			"ops_proxy_requests_success_total",
 			"Total number of successful proxy requests",
-			[]string{"client_name", "protocol", "node", "pod"},
+			[]string{"client_name", "protocol", "namespace", "node", "pod"},
 			nil,
 		),
 		proxyRequestsFailed: prometheus.NewDesc(
 			"ops_proxy_requests_failed_total",
 			"Total number of failed proxy requests",
-			[]string{"client_name", "protocol", "node", "pod"},
+			[]string{"client_name", "protocol", "namespace", "node", "pod"},
 			nil,
 		),
 		proxyLatencySeconds: prometheus.NewDesc(
 			"ops_proxy_latency_seconds",
 			"Proxy request latency in seconds",
-			[]string{"client_name", "protocol", "node", "pod"},
+			[]string{"client_name", "protocol", "namespace", "node", "pod"},
 			nil,
 		),
 		forwardCommandsTotal: prometheus.NewDesc(
 			"ops_proxy_forward_commands_total",
 			"Total number of FORWARD commands sent to clients",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		dataConnectionsMatched: prometheus.NewDesc(
 			"ops_proxy_data_connections_matched_total",
 			"Total number of DATA connections successfully matched to a proxy-id",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		dataConnectionsTimeout: prometheus.NewDesc(
 			"ops_proxy_data_connections_timeout_total",
 			"Total number of timeouts waiting for DATA connection (per proxy-id)",
-			[]string{"client_name", "node", "pod"},
+			[]string{"client_name", "namespace", "node", "pod"},
 			nil,
 		),
 		dataConnectionsUnexpected: prometheus.NewDesc(
 			"ops_proxy_data_connections_unexpected_total",
 			"Total number of unexpected DATA connections (no pending proxy-id)",
-			[]string{"node", "pod"},
+			[]string{"namespace", "node", "pod"},
 			nil,
 		),
 		pendingDataConnections: prometheus.NewDesc(
 			"ops_proxy_pending_data_connections",
 			"Current number of pending proxy-ids waiting for DATA connection",
-			[]string{"node", "pod"},
+			[]string{"namespace", "node", "pod"},
 			nil,
 		),
 		proxyErrorsTotal: prometheus.NewDesc(
 			"ops_proxy_proxy_errors_total",
 			"Total number of proxy/tunnel errors by reason",
-			[]string{"client_name", "reason", "node", "pod"},
+			[]string{"client_name", "reason", "namespace", "node", "pod"},
 			nil,
 		),
 		clientRegistrations:     make(map[string]float64),
@@ -350,24 +349,13 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect implements prometheus.Collector interface
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
-	nodeName := os.Getenv("NODE_NAME")
-	if nodeName == "" {
-		nodeName = "unknown"
-	}
-
-	podName := os.Getenv("POD_NAME")
-	if podName == "" {
-		podName = os.Getenv("HOSTNAME")
-		if podName == "" {
-			podName = "unknown"
-		}
-	}
+	namespace, nodeName, podName := ScrapingMeta()
 
 	ch <- prometheus.MustNewConstMetric(
 		c.serverInfo,
 		prometheus.GaugeValue,
 		1,
-		nodeName, podName,
+		namespace, nodeName, podName,
 	)
 
 	clients := c.GetClients()
@@ -383,14 +371,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		c.clientsTotal,
 		prometheus.GaugeValue,
 		float64(totalClients),
-		nodeName, podName,
+		namespace, nodeName, podName,
 	)
 
 	ch <- prometheus.MustNewConstMetric(
 		c.clientsConnected,
 		prometheus.GaugeValue,
 		float64(connectedClients),
-		nodeName, podName,
+		namespace, nodeName, podName,
 	)
 
 	// Per-name connection status (gauge)
@@ -403,7 +391,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.clientUp,
 			prometheus.GaugeValue,
 			v,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -416,7 +404,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.clientRegistrationsTotal,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -425,7 +413,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.clientDisconnectsTotal,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -434,7 +422,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.connectionsTotal,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -444,7 +432,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.connectionsActive,
 			prometheus.GaugeValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -453,7 +441,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.connectionsFailed,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -462,7 +450,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.connectionsBytesTx,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -471,7 +459,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.connectionsBytesRx,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 
@@ -482,7 +470,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				c.proxyRequestsTotal,
 				prometheus.CounterValue,
 				value,
-				parts[0], parts[1], nodeName, podName,
+				parts[0], parts[1], namespace, nodeName, podName,
 			)
 		}
 	}
@@ -494,7 +482,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				c.proxyRequestsSuccess,
 				prometheus.CounterValue,
 				value,
-				parts[0], parts[1], nodeName, podName,
+				parts[0], parts[1], namespace, nodeName, podName,
 			)
 		}
 	}
@@ -506,7 +494,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				c.proxyRequestsFailed,
 				prometheus.CounterValue,
 				value,
-				parts[0], parts[1], nodeName, podName,
+				parts[0], parts[1], namespace, nodeName, podName,
 			)
 		}
 	}
@@ -519,7 +507,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 				c.proxyLatencySeconds,
 				prometheus.GaugeValue,
 				avg,
-				parts[0], parts[1], nodeName, podName,
+				parts[0], parts[1], namespace, nodeName, podName,
 			)
 		}
 	}
@@ -530,7 +518,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.forwardCommandsTotal,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 	for name, value := range c.dataMatchedByName {
@@ -538,7 +526,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.dataConnectionsMatched,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 	for name, value := range c.dataTimeoutByName {
@@ -546,31 +534,32 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.dataConnectionsTimeout,
 			prometheus.CounterValue,
 			value,
-			name, nodeName, podName,
+			name, namespace, nodeName, podName,
 		)
 	}
 	ch <- prometheus.MustNewConstMetric(
 		c.dataConnectionsUnexpected,
 		prometheus.CounterValue,
 		c.dataUnexpectedTotal,
-		nodeName, podName,
+		namespace, nodeName, podName,
 	)
 	ch <- prometheus.MustNewConstMetric(
 		c.pendingDataConnections,
 		prometheus.GaugeValue,
 		c.pendingDataConnectionsN,
-		nodeName, podName,
+		namespace, nodeName, podName,
 	)
 
 	for key, value := range c.proxyErrorsByKey {
-		parts := strings.Split(key, ":")
-		if len(parts) == 2 {
-			ch <- prometheus.MustNewConstMetric(
-				c.proxyErrorsTotal,
-				prometheus.CounterValue,
-				value,
-				parts[0], parts[1], nodeName, podName,
-			)
+		clientName, reason, ok := strings.Cut(key, ":")
+		if !ok || clientName == "" || reason == "" {
+			continue
 		}
+		ch <- prometheus.MustNewConstMetric(
+			c.proxyErrorsTotal,
+			prometheus.CounterValue,
+			value,
+			clientName, reason, namespace, nodeName, podName,
+		)
 	}
 }

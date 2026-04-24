@@ -8,7 +8,7 @@
 - **本地转发**：单个节点注册三种域名格式后，可以实现本地转发（反向代理）
 - **相互转发**：两个节点可以相互注册对方的域名，实现双向转发
 - **多节点通信**：多节点时，可以用公网 IP 连接其他节点，基于公网 IP 也能与其他节点相互通信
-- **透明转发**：四层 TCP 透明转发，支持 HTTP/HTTPS 和任意 TCP 协议
+- **七层路由**：根据 HTTP `Host` 与 TLS SNI 识别虚拟主机并选择后端，字节流透传（支持 HTTP/HTTPS 及任意 TCP；纯 TCP 无 Host/SNI 时需配置默认路由或走 HTTP CONNECT）
 - **监控指标**：Prometheus 指标和 Grafana 仪表盘
 
 ## 架构
@@ -247,9 +247,12 @@ Grafana 仪表盘文件位于 `grafana/` 目录：
 
 ### Prometheus 采集配置
 
-项目提供了 Prometheus Operator 的配置：
-- `deploy/servicemonitor.yaml` - Peer ServiceMonitor
-- `deploy/podmonitor.yaml` - PodMonitor（采集所有 peer）
+项目提供了采集配置：
+- `deploy/podmonitoring.yaml` - **GKE Managed Prometheus**：`ClusterPodMonitoring`（集群作用域，按标签抓取 `ops-system` 中的 Pod）
+- `deploy/podmonitor.yaml` / `deploy/servicemonitor.yaml` - Prometheus Operator：资源在 **`monitoring`** 命名空间，`namespaceSelector` 指向 **`ops-system`**
+- `deploy/servicemonitor.yaml` - Prometheus Operator `ServiceMonitor`
+
+Grafana 中的 **`cluster`** 标签由采集端（GMP / Prometheus）在抓取时注入，应用指标不再重复导出该维度。**`POD_NAMESPACE`** 仍建议用 Downward API 注入（见 `deploy/deployment.yaml`），以便时间序列上带有 `namespace`。
 
 ## 端口说明
 

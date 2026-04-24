@@ -1,9 +1,9 @@
 package client
 
 import (
-	"os"
 	"sync"
 
+	"github.com/ops-proxy/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -34,25 +34,25 @@ func NewMetricsCollector() prometheus.Collector {
 			info: prometheus.NewDesc(
 				"ops_proxy_client_info",
 				"Client process info metric (always 1)",
-				[]string{"node", "pod"},
+				[]string{"namespace", "node", "pod"},
 				nil,
 			),
 			forwardsTotal: prometheus.NewDesc(
 				"ops_proxy_client_forwards_total",
 				"Total number of forward requests handled by client (by routing name)",
-				[]string{"client_name", "node", "pod"},
+				[]string{"client_name", "namespace", "node", "pod"},
 				nil,
 			),
 			forwardsFailedTotal: prometheus.NewDesc(
 				"ops_proxy_client_forwards_failed_total",
 				"Total number of failed forward requests handled by client (by routing name and reason)",
-				[]string{"client_name", "reason", "node", "pod"},
+				[]string{"client_name", "reason", "namespace", "node", "pod"},
 				nil,
 			),
 			activeForwards: prometheus.NewDesc(
 				"ops_proxy_client_active_forwards",
 				"Current number of in-flight forward requests on client (by routing name)",
-				[]string{"client_name", "node", "pod"},
+				[]string{"client_name", "namespace", "node", "pod"},
 				nil,
 			),
 			forwards:     make(map[string]float64),
@@ -71,33 +71,23 @@ func (m *metricsCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (m *metricsCollector) Collect(ch chan<- prometheus.Metric) {
-	node := os.Getenv("NODE_NAME")
-	if node == "" {
-		node = "unknown"
-	}
-	pod := os.Getenv("POD_NAME")
-	if pod == "" {
-		pod = os.Getenv("HOSTNAME")
-		if pod == "" {
-			pod = "unknown"
-		}
-	}
+	namespace, node, pod := metrics.ScrapingMeta()
 
-	ch <- prometheus.MustNewConstMetric(m.info, prometheus.GaugeValue, 1, node, pod)
+	ch <- prometheus.MustNewConstMetric(m.info, prometheus.GaugeValue, 1, namespace, node, pod)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	for name, v := range m.forwards {
-		ch <- prometheus.MustNewConstMetric(m.forwardsTotal, prometheus.CounterValue, v, name, node, pod)
+		ch <- prometheus.MustNewConstMetric(m.forwardsTotal, prometheus.CounterValue, v, name, namespace, node, pod)
 	}
 	for name, byReason := range m.forwardsFail {
 		for reason, v := range byReason {
-			ch <- prometheus.MustNewConstMetric(m.forwardsFailedTotal, prometheus.CounterValue, v, name, reason, node, pod)
+			ch <- prometheus.MustNewConstMetric(m.forwardsFailedTotal, prometheus.CounterValue, v, name, reason, namespace, node, pod)
 		}
 	}
 	for name, v := range m.active {
-		ch <- prometheus.MustNewConstMetric(m.activeForwards, prometheus.GaugeValue, v, name, node, pod)
+		ch <- prometheus.MustNewConstMetric(m.activeForwards, prometheus.GaugeValue, v, name, namespace, node, pod)
 	}
 }
 

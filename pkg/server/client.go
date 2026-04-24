@@ -227,45 +227,32 @@ func (s *ProxyServer) UnregisterClientByName(name string) {
 // For local services (IP="local"), returns even if Connected=false (no connection needed)
 // For remote services, only returns if Connected=true (need active connection)
 func (s *ProxyServer) GetClient(name string) *types.ClientInfo {
-
-	logging.Logf("[GetClient] searching for name=%q services_count=%d", name, len(s.services))
 	candidates := make([]*types.ClientInfo, 0)
-	for key, client := range s.services {
+	for _, client := range s.services {
 		if client == nil {
 			continue
 		}
 		if client.Name != name {
 			continue
 		}
-		logging.Logf("[GetClient] found candidate key=%s name=%s ip=%s backend=%s connected=%t", key, client.Name, client.IP, client.BackendAddr, client.Connected)
-		// Local services don't need connection, always include them
 		if client.IP == "local" {
 			candidates = append(candidates, client)
-			logging.Logf("[GetClient] added local candidate name=%s", name)
 		} else if client.Connected {
-			// Remote services need active connection
 			candidates = append(candidates, client)
-			logging.Logf("[GetClient] added remote candidate name=%s ip=%s", name, client.IP)
-		} else {
-			logging.Logf("[GetClient] skipped disconnected remote service name=%s ip=%s", name, client.IP)
 		}
 	}
 	if len(candidates) == 0 {
-		logging.Logf("[GetClient] no candidates found for name=%q", name)
 		return nil
 	}
 	// Prefer local services
 	for _, client := range candidates {
 		if client.IP == "local" {
-			logging.Logf("[GetClient] returning local service name=%s backend=%s", name, client.BackendAddr)
 			return client
 		}
 	}
-	// If no local service, return first remote service
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].IP < candidates[j].IP
 	})
-	logging.Logf("[GetClient] returning remote service name=%s ip=%s backend=%s", name, candidates[0].IP, candidates[0].BackendAddr)
 	return candidates[0]
 }
 
@@ -539,26 +526,15 @@ func (s *ProxyServer) servicesDebugSnapshot() string {
 // servicesByNameSnapshot returns service entries for a given name.
 // Format: peer_id=... backend=...
 func (s *ProxyServer) servicesByNameSnapshot(name string) string {
-	logging.Logf("[servicesByNameSnapshot] START name=%q", name)
-
-	logging.Logf("[servicesByNameSnapshot] services count=%d", len(s.services))
 	if strings.TrimSpace(name) == "" || len(s.services) == 0 {
-		logging.Logf("[servicesByNameSnapshot] empty name or no services, returning <empty>")
 		return "<empty>"
 	}
 
 	items := make([]string, 0)
-	for key, c := range s.services {
-		if c == nil {
-			logging.Logf("[servicesByNameSnapshot] skipping nil client key=%q", key)
+	for _, c := range s.services {
+		if c == nil || c.Name != name {
 			continue
 		}
-		if c.Name != name {
-			continue
-		}
-		logging.Logf("[servicesByNameSnapshot] found match key=%q name=%q peer_id=%q remote_peer_addr=%q backend=%q",
-			key, c.Name, c.PeerID, c.IP, c.BackendAddr)
-		// Use PeerID for display (not IP which might be proxy address)
 		peerIdentifier := c.PeerID
 		if peerIdentifier == "" {
 			peerIdentifier = c.IP
@@ -566,13 +542,10 @@ func (s *ProxyServer) servicesByNameSnapshot(name string) string {
 		items = append(items, "peer_id="+peerIdentifier+" backend="+c.BackendAddr)
 	}
 	if len(items) == 0 {
-		logging.Logf("[servicesByNameSnapshot] no matches found, returning <empty>")
 		return "<empty>"
 	}
 	sort.Strings(items)
-	result := strings.Join(items, "; ")
-	logging.Logf("[servicesByNameSnapshot] returning result=%q", result)
-	return result
+	return strings.Join(items, "; ")
 }
 
 // RegisterLocalServices registers SERVICE_ADDR entries into the local peer registry.

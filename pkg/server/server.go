@@ -6,6 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/ops-proxy/pkg/client"
 	"github.com/ops-proxy/pkg/config"
 	"github.com/ops-proxy/pkg/logging"
 	"github.com/ops-proxy/pkg/metrics"
@@ -41,7 +42,8 @@ func NewProxyServer(cfg *config.Config) (*ProxyServer, error) {
 	
 	server.collector = collector
 	registry.MustRegister(collector)
-	
+	registry.MustRegister(client.NewMetricsCollector())
+
 	return server, nil
 }
 

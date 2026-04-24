@@ -1,19 +1,21 @@
+# Prometheus Operator — 资源放在 monitoring；抓取目标 Pod 仍在 ops-system（见 namespaceSelector）。
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
   name: ops-proxy
   namespace: monitoring
   labels:
-    ops: "true"
+    app.kubernetes.io/name: ops-proxy
+    release: prometheus
 spec:
   selector:
     matchLabels:
-      component: ops-proxy
+      app: ops-proxy
   podMetricsEndpoints:
-  - port: metrics
-    interval: 30s
-    path: /metrics
+    - port: metrics
+      interval: 30s
+      path: /metrics
   namespaceSelector:
     matchNames:
-    - ops-system
+      - ops-system
 

@@ -663,17 +663,18 @@ func (s *ProxyServer) processSync(peerIP string, regs []protocol.Registration, c
 	s.logPeerServicesMap()
 }
 
-// handleForwardRequestWithConn handles a FORWARD request using the existing control connection
-// The control connection (conn) is the established duplex connection between peers
-// We use this connection to find the peer and establish DATA connection
-func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
-	logging.Logf("[forward] handling proxy_id=%s name=%s backend=%s from=%s", proxyID, name, backendAddr, peerAddr)
+// handleForwardRequestWithConn handles a FORWARD from a remote peer: dial local backend,
+// then open a dedicated DATA TCP connection to the requesting peer's advertised bind
+// address (REGISTER/SYNC peer_addr) and bridge. This matches forwardOnce on the initiator,
+// which waits for DATA:proxy_id on a new connection to its listener — not on the control line.
+func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, requesterPeerAddr, proxyID, name, backendAddr string, cfg *config.Config) {
+	logging.Logf("[forward] handling proxy_id=%s name=%s backend=%s data_peer=%s", proxyID, name, backendAddr, requesterPeerAddr)
 	if cfg != nil && cfg.Log.Level == "debug" {
 		controlRemote := ""
 		if controlConn != nil && controlConn.RemoteAddr() != nil {
 			controlRemote = controlConn.RemoteAddr().String()
 		}
-		logging.Logf("[debug] FORWARD request control_remote=%s", controlRemote)
+		logging.Logf("[debug] FORWARD request control_remote=%s data_dial=%s", controlRemote, requesterPeerAddr)
 	}
 
 	dialTimeout := 5 * time.Second
@@ -682,6 +683,14 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 	}
 	if cfg != nil && cfg.Log.Level == "debug" {
 		logging.Logf("[debug] FORWARD handler started proxy_id=%s dial_timeout=%s", proxyID, dialTimeout)
+	}
+
+	if strings.TrimSpace(requesterPeerAddr) == "" {
+		logging.Logf("[error] requester peer address empty, cannot open DATA channel proxy_id=%s name=%s", proxyID, name)
+		if s.collector != nil {
+			s.collector.RecordProxyError(name, "data_dial_error")
+		}
+		return
 	}
 
 	// Step 1: Connect to local backend
@@ -702,65 +711,54 @@ func (s *ProxyServer) handleForwardRequestWithConn(controlConn net.Conn, peerAdd
 		logging.Logf("[debug] backend connected local=%s", backendConn.LocalAddr())
 	}
 
-	// Step 2: Use the existing control connection to send data (peer-to-peer: long connection)
-	// For peer-to-peer communication, reuse the control connection instead of creating a new DATA connection
-	// This is more efficient and reduces connection overhead between peers
-	if controlConn == nil {
-		logging.Logf("[error] control connection is nil, cannot send data proxy_id=%s", proxyID)
+	// Step 2: Dial the requesting peer's proxy listener; first line must be DATA:proxy_id
+	logging.Logf("[data] dialing DATA channel proxy_id=%s to requester=%s", proxyID, requesterPeerAddr)
+	dataConn, err := net.DialTimeout("tcp", requesterPeerAddr, dialTimeout)
+	if err != nil {
+		logging.Logf("[error] DATA dial failed proxy_id=%s requester=%s err=%v", proxyID, requesterPeerAddr, err)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_dial_error")
 		}
 		return
 	}
+	defer dataConn.Close()
 
-	// Send DATA header to identify this data stream on the control connection
 	dataHeader := protocol.FormatData(proxyID)
-	controlConnRemote := ""
-	if controlConn.RemoteAddr() != nil {
-		controlConnRemote = controlConn.RemoteAddr().String()
-	}
-	logging.Logf("[data] sending DATA header proxy_id=%s name=%s to=%s", proxyID, name, controlConnRemote)
-	if cfg != nil && cfg.Log.Level == "debug" {
-		logging.Logf("[debug] DATA header=%q", strings.TrimSpace(dataHeader))
-	}
-
-	// Send DATA header on control connection to mark the start of data transmission
-	if _, err := controlConn.Write([]byte(dataHeader)); err != nil {
+	if _, err := dataConn.Write([]byte(dataHeader)); err != nil {
 		logging.Logf("[error] DATA header send failed proxy_id=%s err=%v", proxyID, err)
 		if s.collector != nil {
 			s.collector.RecordProxyError(name, "data_header_error")
 		}
 		return
 	}
-	logging.Logf("[data] DATA header sent proxy_id=%s", proxyID)
-
-	// Use control connection as data connection
-	dataConn := controlConn
+	if cfg != nil && cfg.Log.Level == "debug" {
+		logging.Logf("[debug] DATA header sent on dedicated conn proxy_id=%s header=%q", proxyID, strings.TrimSpace(dataHeader))
+	}
 
 	logging.Logf("[forward] bridge started proxy_id=%s name=%s backend=%s", proxyID, name, backendAddr)
 
-	// Step 4: Bridge data in both directions
+	// Step 3: Bridge DATA connection <-> local backend
 	var bytesToPeer, bytesToBackend int64
 	errCh := make(chan error, 2)
 
 	go func() {
-		n, e := io.Copy(dataConn, backendConn) // backend -> peer
+		n, e := io.Copy(dataConn, backendConn) // backend -> requesting peer
 		bytesToPeer = n
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[debug] backend->peer done proxy_id=%s bytes=%d err=%v", proxyID, n, e)
 		}
-		// Don't close control connection write side - it's still used for other commands
-		// Only signal EOF by not writing more data
+		if tcpConn, ok := dataConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
 		errCh <- e
 	}()
 
 	go func() {
-		n, e := io.Copy(backendConn, dataConn) // peer -> backend
+		n, e := io.Copy(backendConn, dataConn) // requesting peer -> backend
 		bytesToBackend = n
 		if cfg != nil && cfg.Log.Level == "debug" {
 			logging.Logf("[debug] peer->backend done proxy_id=%s bytes=%d err=%v", proxyID, n, e)
 		}
-		// Close write side to signal EOF to backend
 		if tcpConn, ok := backendConn.(*net.TCPConn); ok {
 			tcpConn.CloseWrite()
 		}
